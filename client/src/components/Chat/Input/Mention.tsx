@@ -206,9 +206,7 @@ function MentionContent({
               setActiveIndex((prevIndex) => (prevIndex - 1 + matches.length) % matches.length);
             } else if (e.key === 'Enter' || e.key === 'Tab') {
               if (matches.length === 0) {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                }
+                e.preventDefault();
                 setOpen(false);
                 setShowPopover(false);
                 textAreaRef.current?.focus();
