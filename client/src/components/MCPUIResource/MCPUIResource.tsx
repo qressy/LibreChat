@@ -1,6 +1,6 @@
-import React, { useRef, useState, useMemo, useCallback } from 'react';
+import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
 import { useConversationUIResources } from '~/hooks/Messages/useConversationUIResources';
-import { getMCPSandboxUrl, buildAppToolResult } from '~/utils/mcpApps';
+import { getMCPSandboxUrl, buildAppToolResult, isMcpAppResource } from '~/utils/mcpApps';
 import { useOptionalMessagesConversation } from '~/Providers';
 import { useAppBridge } from '~/hooks/MCP';
 import { useLocalize } from '~/hooks';
@@ -15,6 +15,7 @@ interface MCPUIResourceProps {
 }
 
 const EMPTY_RESOURCE = { resourceId: '', uri: '' };
+const SPINNER_TIMEOUT_MS = 10_000;
 
 export function MCPUIResource(props: MCPUIResourceProps) {
   const { resourceId } = props.node.properties;
@@ -25,8 +26,18 @@ export function MCPUIResource(props: MCPUIResourceProps) {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [loaded, setLoaded] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const [tornDown, setTornDown] = useState(false);
   const [height, setHeight] = useState<number | undefined>(undefined);
   const sandboxUrl = useMemo(() => getMCPSandboxUrl(), []);
+
+  useEffect(() => {
+    if (loaded) {
+      return;
+    }
+    const timer = setTimeout(() => setTimedOut(true), SPINNER_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [loaded]);
 
   const toolResult = useMemo(
     () => (uiResource ? buildAppToolResult(uiResource) : undefined),
@@ -46,7 +57,13 @@ export function MCPUIResource(props: MCPUIResourceProps) {
     uiResource?.toolArgs as Record<string, unknown> | undefined,
     toolResult,
     handleSizeChanged,
+    () => setLoaded(true),
+    () => setTornDown(true),
   );
+
+  if (tornDown) {
+    return null;
+  }
 
   if (!uiResource) {
     return (
@@ -59,15 +76,20 @@ export function MCPUIResource(props: MCPUIResourceProps) {
   }
 
   try {
-    if (uiResource.toolName && uiResource.serverName) {
+    if (isMcpAppResource(uiResource)) {
       return (
         <span
           className="relative mx-1 inline-block w-full align-middle"
           style={height ? { height } : { minHeight: '200px' }}
         >
-          {!loaded && (
+          {!loaded && !timedOut && (
             <div className="absolute inset-0 flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary px-4 py-3 text-sm text-text-secondary">
               {localize('com_ui_loading_interactive_view')}
+            </div>
+          )}
+          {timedOut && !loaded && (
+            <div className="absolute inset-0 flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary px-4 py-3 text-sm text-text-secondary">
+              {localize('com_ui_mcp_app_failed_to_load')}
             </div>
           )}
           <iframe
@@ -86,7 +108,7 @@ export function MCPUIResource(props: MCPUIResourceProps) {
       );
     }
 
-    if (uiResource.text && (uiResource.mimeType ?? 'text/html').includes('html')) {
+    if (uiResource.text) {
       return (
         <span className="mx-1 inline-block w-full align-middle">
           <iframe

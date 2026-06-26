@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useRecoilValue } from 'recoil';
+import { QueryKeys } from 'librechat-data-provider';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   AppBridge,
   PostMessageTransport,
@@ -12,6 +14,7 @@ import {
   fetchMCPResourceHtml,
   readMCPResource,
   listMCPResources,
+  listMCPResourceTemplates,
 } from '~/utils/mcpApps';
 import { useOptionalMessagesOperations } from '~/Providers';
 import { logger } from '~/utils';
@@ -27,37 +30,41 @@ export function useAppBridge(
   toolArgs: Record<string, unknown> | undefined,
   toolResult: AppToolResult | undefined,
   onSizeChanged: (params: SizeParams) => void,
+  onLoaded?: () => void,
+  onTeardown?: () => void,
 ) {
   const user = useRecoilValue(store.user);
   const { ask } = useOptionalMessagesOperations();
+  const queryClient = useQueryClient();
   const bridgeRef = useRef<AppBridge | null>(null);
+  // The bridge mounts once per resourceId and reads these only inside its handlers, so a changed
+  // callback or tool-call snapshot never tears down the live AppBridge. Synced at render time
+  // (idempotent under Strict Mode) rather than via an effect that would only mirror props.
   const askRef = useRef(ask);
-  useEffect(() => {
-    askRef.current = ask;
-  });
-
-  // Refs keep latest values accessible inside the stable effect closure without triggering remount.
-  // The bridge mounts once per resourceId; toolArgs/toolResult/onSizeChanged are captured at
-  // mount time and are stable for a given resource identity because they derive from the same
-  // tool-call snapshot that produced the resource.
   const onSizeChangedRef = useRef(onSizeChanged);
+  const onLoadedRef = useRef(onLoaded);
+  const onTeardownRef = useRef(onTeardown);
   const toolArgsRef = useRef(toolArgs);
   const toolResultRef = useRef(toolResult);
-  useEffect(() => {
-    onSizeChangedRef.current = onSizeChanged;
-  });
-  useEffect(() => {
-    toolArgsRef.current = toolArgs;
-  });
-  useEffect(() => {
-    toolResultRef.current = toolResult;
-  });
+  askRef.current = ask;
+  onSizeChangedRef.current = onSizeChanged;
+  onLoadedRef.current = onLoaded;
+  onTeardownRef.current = onTeardown;
+  toolArgsRef.current = toolArgs;
+  toolResultRef.current = toolResult;
 
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !resource.serverName) return;
 
     let bridge: AppBridge | null = null;
+    // A resourceId switch or unmount can run cleanup while the iframe is still loading or
+    // bridge.connect() is pending; this flag stops the stale handleLoad from attaching a second
+    // bridge to the same iframe.
+    let cancelled = false;
+    // The sandbox proxy re-emits `sandbox-proxy-ready` every 500ms until it receives the resource,
+    // so fetch and send it only once to avoid overlapping reads and repeated inner-frame creation.
+    let sandboxReadyHandled = false;
 
     const handleLoad = async () => {
       if (!iframe.contentWindow) return;
@@ -111,10 +118,13 @@ export function useAppBridge(
       };
 
       bridge.onreadresource = async (params) =>
-        readMCPResource(resource.serverName as string, params.uri, user?.id) as never;
+        readMCPResource(resource.serverName as string, params.uri) as never;
 
       bridge.onlistresources = async (params) =>
         listMCPResources(resource.serverName as string, params?.cursor) as never;
+
+      bridge.onlistresourcetemplates = async (params) =>
+        listMCPResourceTemplates(resource.serverName as string, params?.cursor) as never;
 
       bridge.onmessage = async ({ content }) => {
         const text = (content as MessageContentBlock[])
@@ -128,12 +138,25 @@ export function useAppBridge(
       };
 
       bridge.addEventListener('sandboxready', async () => {
+        if (sandboxReadyHandled) {
+          return;
+        }
+        sandboxReadyHandled = true;
         try {
           // Inline mcp-app resources already carry their HTML, so use it directly instead of a
           // resources/read round trip; resourceUri-only apps are fetched from the server.
           const { html, csp, permissions } = resource.text
             ? { html: resource.text, csp: resource.csp, permissions: resource.permissions }
-            : await fetchMCPResourceHtml(resource.serverName as string, resource.uri, user?.id);
+            : await queryClient.fetchQuery({
+                queryKey: [
+                  QueryKeys.mcpAppResourceHtml,
+                  resource.serverName,
+                  resource.uri,
+                  user?.id,
+                ],
+                queryFn: () => fetchMCPResourceHtml(resource.serverName as string, resource.uri),
+                staleTime: 5 * 60 * 1000,
+              });
           const resolvedPermissions = permissions ?? resource.permissions;
           if (resolvedPermissions) {
             const updatedAllow = buildAllowAttribute(
@@ -153,13 +176,16 @@ export function useAppBridge(
       });
 
       bridge.oninitialized = async () => {
+        // The app handshake completed: treat this as the load signal so apps that never emit a
+        // size-change (auto-resize disabled) are still revealed instead of stuck behind the spinner.
+        onLoadedRef.current?.();
         const args = toolArgsRef.current;
         const result = toolResultRef.current;
-        if (args) {
-          await bridge!
-            .sendToolInput({ arguments: args })
-            .catch((err: unknown) => logger.error('[MCP App] sendToolInput failed', err));
-        }
+        // MCP Apps expect tool input exactly once before the result, even for no-argument tools,
+        // so apps that initialize from ontoolinput always receive it.
+        await bridge!
+          .sendToolInput({ arguments: args ?? {} })
+          .catch((err: unknown) => logger.error('[MCP App] sendToolInput failed', err));
         if (result) {
           await bridge!
             .sendToolResult(result as never)
@@ -171,6 +197,7 @@ export function useAppBridge(
 
       bridge.addEventListener('requestteardown', async () => {
         await bridge!.teardownResource({}).catch(() => {});
+        onTeardownRef.current?.();
       });
 
       bridge.addEventListener('loggingmessage', (event) => {
@@ -181,6 +208,10 @@ export function useAppBridge(
       await bridge
         .connect(transport)
         .catch((err: unknown) => logger.error('[MCP App] bridge.connect failed', err));
+      if (cancelled) {
+        bridge.close();
+        return;
+      }
       bridgeRef.current = bridge;
     };
 
@@ -192,9 +223,12 @@ export function useAppBridge(
     iframe.src = iframe.getAttribute('data-sandbox-url') ?? '';
 
     return () => {
+      cancelled = true;
+      iframe.removeEventListener('load', handleLoad);
       bridgeRef.current?.teardownResource({}).catch(() => {});
       bridgeRef.current?.close();
       bridgeRef.current = null;
+      bridge?.close();
       bridge = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

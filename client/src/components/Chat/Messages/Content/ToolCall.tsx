@@ -10,7 +10,7 @@ import {
   actionDomainSeparator,
 } from 'librechat-data-provider';
 import type { TAttachment, UIResource } from 'librechat-data-provider';
-import { getMCPSandboxUrl, buildAppToolResult } from '~/utils/mcpApps';
+import { getMCPSandboxUrl, buildAppToolResult, isMcpAppResource } from '~/utils/mcpApps';
 import { useLocalize, useProgress, useExpandCollapse } from '~/hooks';
 import { ToolIcon, getToolIconType, isError } from './ToolOutput';
 import { useMCPIconMap, useAppBridge } from '~/hooks/MCP';
@@ -34,6 +34,7 @@ const MCPAppView = React.memo(function MCPAppView({
   const [height, setHeight] = useState<number | undefined>(undefined);
   const [loaded, setLoaded] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
+  const [tornDown, setTornDown] = useState(false);
   const sandboxUrl = useMemo(() => getMCPSandboxUrl(), []);
 
   useEffect(() => {
@@ -59,10 +60,22 @@ const MCPAppView = React.memo(function MCPAppView({
     }
   }, []);
 
-  useAppBridge(iframeRef, app, toolArgs, toolResult, handleSizeChanged);
+  useAppBridge(
+    iframeRef,
+    app,
+    toolArgs,
+    toolResult,
+    handleSizeChanged,
+    () => setLoaded(true),
+    () => setTornDown(true),
+  );
 
-  const isAppBacked = !!(app.toolName && app.serverName);
-  if (!isAppBacked && app.text && (app.mimeType ?? 'text/html').includes('html')) {
+  if (tornDown) {
+    return null;
+  }
+
+  const isAppBacked = isMcpAppResource(app);
+  if (!isAppBacked && app.text) {
     return (
       <div className="my-2">
         <iframe
@@ -264,8 +277,7 @@ export default function ToolCall({
         ?.filter((a) => a.type === Tools.ui_resources)
         .flatMap((a) => (a[Tools.ui_resources] ?? []) as UIResource[]) ?? [];
     return uiResources.filter(
-      (r) =>
-        (r.toolName && r.serverName) || (r.text && (r.mimeType ?? 'text/html').includes('html')),
+      (r) => isMcpAppResource(r) || (r.text && (r.mimeType ?? 'text/html').includes('html')),
     );
   }, [attachments]);
 

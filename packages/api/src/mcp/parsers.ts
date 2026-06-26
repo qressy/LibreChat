@@ -14,9 +14,17 @@ function generateResourceId(text: string): string {
  * resources by ID, so two calls that share a base (resourceUri/text) and args but differ in
  * structuredContent, text content, _meta, or error state must not collide and overwrite each other.
  */
-function deriveResourceId(base: string, result: t.MCPToolCallResponse, toolArgs: unknown): string {
+function deriveResourceId(
+  base: string,
+  result: t.MCPToolCallResponse,
+  toolArgs: unknown,
+  serverName?: string,
+  toolName?: string,
+): string {
   const meta = (result as { _meta?: unknown } | undefined)?._meta;
   const parts = [
+    serverName ?? '',
+    toolName ?? '',
     base,
     result?.structuredContent != null ? JSON.stringify(result.structuredContent) : '',
     result?.content != null ? JSON.stringify(result.content) : '',
@@ -208,7 +216,12 @@ export function formatToolContent(
     },
 
     resource: (item) => {
-      const isUiResource = item.resource.uri.startsWith('ui://');
+      // MCP Apps defines a single renderable resource type, text/html;profile=mcp-app, and the
+      // host renders HTML only. ui:// resources with other mime types (json, remote-dom) have no
+      // renderer, so they fall through to plain resource text instead of an unrenderable marker.
+      const mimeType =
+        typeof item.resource.mimeType === 'string' ? item.resource.mimeType : 'text/html';
+      const isUiResource = item.resource.uri.startsWith('ui://') && mimeType.includes('html');
       const resourceText: string[] = [];
 
       if (isUiResource) {
@@ -216,7 +229,13 @@ export function formatToolContent(
           'text' in item.resource && item.resource.text && typeof item.resource.text === 'string'
             ? item.resource.text
             : item.resource.uri;
-        const resourceId = deriveResourceId(baseHash, result, metadata?.toolArgs);
+        const resourceId = deriveResourceId(
+          baseHash,
+          result,
+          metadata?.toolArgs,
+          metadata?.serverName,
+          metadata?.toolName,
+        );
         const itemUi = (item.resource._meta as { ui?: Record<string, unknown> } | undefined)?.ui as
           | { csp?: UIResource['csp']; permissions?: UIResource['permissions'] }
           | undefined;
@@ -271,7 +290,13 @@ export function formatToolContent(
     metadata.serverName &&
     metadata.toolName
   ) {
-    const resourceId = deriveResourceId(metadata.resourceUri, result, metadata.toolArgs);
+    const resourceId = deriveResourceId(
+      metadata.resourceUri,
+      result,
+      metadata.toolArgs,
+      metadata.serverName,
+      metadata.toolName,
+    );
     uiResources.push({
       resourceId,
       uri: metadata.resourceUri,
