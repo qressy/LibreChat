@@ -64,6 +64,7 @@ export async function loadDefaultInterface({
     remoteAgents: interfaceConfig?.remoteAgents,
     skills: interfaceConfig?.skills,
     sharedLinks: interfaceConfig?.sharedLinks,
+    showProcessingSteps: interfaceConfig?.showProcessingSteps,
   });
 
   return loadedInterface;

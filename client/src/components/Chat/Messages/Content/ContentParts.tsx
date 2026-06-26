@@ -10,6 +10,7 @@ import type { ToolCallGroupExpansionState } from './ToolCallGroup';
 import { ParallelContentRenderer, type PartWithIndex } from './ParallelContent';
 import { mapAttachments, groupSequentialToolCalls } from '~/utils';
 import { MessageContext, SearchContext } from '~/Providers';
+import { useGetStartupConfig } from '~/data-provider';
 import PendingSkillCall from './Parts/PendingSkillCall';
 import { EditTextPart, EmptyText } from './Parts';
 import MemoryArtifacts from './MemoryArtifacts';
@@ -147,6 +148,8 @@ const ContentParts = memo(function ContentParts({
   createdAt,
 }: ContentPartsProps) {
   const attachmentMap = useMemo(() => mapAttachments(attachments ?? []), [attachments]);
+  const { data: startupConfig } = useGetStartupConfig();
+  const showProcessingSteps = startupConfig?.interface?.showProcessingSteps !== false;
   const effectiveIsSubmitting = isLatestMessage ? isSubmitting : false;
   const toolGroupExpansionRef = useRef(new Map<string, ToolCallGroupExpansionState>());
   const fallbackScopeRef = useRef({ messageId, scope: 0 });
@@ -226,6 +229,25 @@ const ContentParts = memo(function ContentParts({
     pendingSkills.map((name) => (
       <PendingSkillCall key={`pending-skill-${name}`} skillName={name} loaded={hasRealContent} />
     ));
+
+  /**
+   * True once a non-empty text part exists. When `showProcessingSteps` is false,
+   * tool-call and reasoning parts render nothing (see `Part`), so a message that
+   * has only those parts would show no activity at all while the model works.
+   * We use this to keep the streaming-cursor loader visible until the first
+   * visible text lands.
+   */
+  const hasVisibleText = useMemo(
+    () =>
+      (content ?? []).some((part) => {
+        if (part?.type !== ContentTypes.TEXT) {
+          return false;
+        }
+        const text = typeof part.text === 'string' ? part.text : (part.text?.value ?? '');
+        return text.trim().length > 0;
+      }),
+    [content],
+  );
 
   const renderPart = useCallback(
     (part: TMessageContentParts, idx: number, isLastPart: boolean) => {
@@ -366,7 +388,16 @@ const ContentParts = memo(function ContentParts({
   }
 
   const safeContent = content ?? [];
-  const showEmptyCursor = safeContent.length === 0 && effectiveIsSubmitting;
+  /**
+   * Show the streaming-cursor loader while submitting when there is nothing
+   * visible yet: either no content at all, or — with `showProcessingSteps`
+   * disabled — only hidden tool-call/reasoning parts and no visible text yet.
+   * This restores the "working…" animation that intermediate steps used to
+   * provide before they were hidden.
+   */
+  const showEmptyCursor =
+    effectiveIsSubmitting &&
+    (safeContent.length === 0 || (!showProcessingSteps && !hasVisibleText));
   const lastContentIdx = safeContent.length - 1;
 
   // Parallel content: use dedicated renderer with columns (TMessageContentParts includes ContentMetadata)

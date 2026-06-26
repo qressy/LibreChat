@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import {
   Tools,
   Constants,
@@ -24,6 +24,7 @@ import {
 } from './Parts';
 import { ErrorMessage } from './MessageContent';
 import RetrievalCall from './RetrievalCall';
+import { useGetStartupConfig } from '~/data-provider';
 import { getCachedPreview } from '~/utils';
 import AgentHandoff from './AgentHandoff';
 import CodeAnalyze from './CodeAnalyze';
@@ -54,6 +55,12 @@ const Part = memo(function Part({
   hideAttachments,
   onToolExpand,
 }: PartProps) {
+  const { data: startupConfig } = useGetStartupConfig();
+  const showProcessingSteps = useMemo(
+    () => startupConfig?.interface?.showProcessingSteps !== false,
+    [startupConfig],
+  );
+
   if (!part) {
     return null;
   }
@@ -112,6 +119,9 @@ const Part = memo(function Part({
       </Container>
     );
   } else if (part.type === ContentTypes.THINK) {
+    if (!showProcessingSteps) {
+      return null;
+    }
     const reasoning = typeof part.think === 'string' ? part.think : part.think?.value;
     if (typeof reasoning !== 'string') {
       return null;
@@ -128,6 +138,9 @@ const Part = memo(function Part({
       />
     );
   } else if (part.type === ContentTypes.TOOL_CALL) {
+    if (!showProcessingSteps) {
+      return null;
+    }
     const toolCall = part[ContentTypes.TOOL_CALL];
 
     if (!toolCall) {

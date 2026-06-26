@@ -1225,6 +1225,8 @@ export const interfaceSchema = z
     /** Tool keys (and `'mcp'` or an MCP server name) pinned to the prompt bar by default */
     defaultPinnedTools: z.array(z.string()).optional(),
     buildInfo: z.boolean().optional(),
+    /** When false, hides thinking blocks, tool-call pills, and MCP app widgets from chat messages */
+    showProcessingSteps: z.boolean().optional(),
     remoteAgents: z
       .object({
         use: z.boolean().optional(),
