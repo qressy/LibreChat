@@ -197,5 +197,8 @@
       "admin/",
       "packages/"
     ]
+  },
+  "dependencies": {
+    "playwright": "^1.61.1"
   }
 }
