@@ -18,6 +18,46 @@ import { useLocalize } from '~/hooks';
 
 const defaultInterface = getConfigDefaults().interface;
 
+function ModelSelectorBranding() {
+  const { agentsMap, modelSpecs, mappedEndpoints, endpointsConfig, selectedValues } =
+    useModelSelectorContext();
+  const localize = useLocalize();
+
+  const selectedIcon = useMemo(
+    () =>
+      getSelectedIcon({
+        mappedEndpoints: mappedEndpoints ?? [],
+        selectedValues,
+        modelSpecs,
+        endpointsConfig,
+      }),
+    [mappedEndpoints, selectedValues, modelSpecs, endpointsConfig],
+  );
+
+  const selectedDisplayValue = useMemo(
+    () =>
+      getDisplayValue({
+        localize,
+        agentsMap,
+        modelSpecs,
+        selectedValues,
+        mappedEndpoints: mappedEndpoints ?? [],
+      }),
+    [localize, agentsMap, modelSpecs, selectedValues, mappedEndpoints],
+  );
+
+  return (
+    <div className="my-1 flex h-9 items-center gap-2 px-3 py-2">
+      {selectedIcon != null && React.isValidElement(selectedIcon) && (
+        <div className="flex flex-shrink-0 items-center justify-center overflow-hidden">
+          {selectedIcon}
+        </div>
+      )}
+      <span className="text-sm font-semibold text-text-primary">{selectedDisplayValue}</span>
+    </div>
+  );
+}
+
 function ModelSelectorContent() {
   const localize = useLocalize();
   const modelSelectorHint = useShortcutHint('openModelSelector', localize('com_ui_select_model'));
@@ -132,15 +172,16 @@ export default function ModelSelector({ startupConfig }: ModelSelectorProps) {
   const interfaceConfig = startupConfig?.interface ?? defaultInterface;
   const modelSpecs = startupConfig?.modelSpecs?.list ?? [];
 
-  // Hide the selector when modelSelect is false and there are no model specs to show
   if (interfaceConfig.modelSelect === false && modelSpecs.length === 0) {
     return null;
   }
 
+  const Content = interfaceConfig.modelSelect === false ? ModelSelectorBranding : ModelSelectorContent;
+
   return (
     <ModelSelectorChatProvider>
       <ModelSelectorProvider startupConfig={startupConfig}>
-        <ModelSelectorContent />
+        <Content />
       </ModelSelectorProvider>
     </ModelSelectorChatProvider>
   );
