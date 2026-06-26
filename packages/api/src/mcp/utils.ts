@@ -12,6 +12,8 @@ const BODY_PLACEHOLDER_FIELDS: Record<string, keyof RequestBody> = {
   CONVERSATIONID: 'conversationId',
   PARENTMESSAGEID: 'parentMessageId',
   MESSAGEID: 'messageId',
+  TIMEZONE: 'timezone',
+  LOCALE: 'locale',
 };
 
 type PlaceholderValue =

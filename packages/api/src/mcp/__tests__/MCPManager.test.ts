@@ -573,6 +573,46 @@ describe('MCPManager', () => {
       );
     });
 
+    it('adds buyer locale headers from requestBody to MCP tool calls', async () => {
+      const serverConfig: t.SSEOptions = {
+        type: 'sse',
+        url: 'https://api.example.com',
+        headers: {
+          Authorization: 'Bearer static-token',
+        },
+      };
+
+      mockAppConnections({
+        get: jest.fn().mockResolvedValue(mockConnection),
+      });
+
+      (mockRegistryInstance.getServerConfig as jest.Mock).mockResolvedValue(serverConfig);
+
+      const manager = await MCPManager.createInstance(newMCPServersConfig());
+
+      await manager.callTool({
+        user: mockUser as IUser,
+        serverName,
+        toolName: 'test_tool',
+        provider: 'openai',
+        flowManager: mockFlowManager as unknown as Parameters<
+          typeof manager.callTool
+        >[0]['flowManager'],
+        requestBody: {
+          timezone: 'Asia/Calcutta',
+          locale: 'en-GB',
+        },
+      });
+
+      expect(mockConnection.setRequestHeaders).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Authorization: 'Bearer static-token',
+          'x-buyer-timezone': 'Asia/Calcutta',
+          'x-buyer-locale': 'en-GB',
+        }),
+      );
+    });
+
     it('should attach request OAuth handler without reprocessing resolved config', async () => {
       const rawServerConfig = {
         type: 'sse',

@@ -752,6 +752,31 @@ describe('initializeAgent — stable and dynamic instruction fields', () => {
     );
   });
 
+  it('does not infer buyer country from locale when appending buyer context', async () => {
+    const { agent, req, res, loadTools, db } = createMocks();
+    req.body = {
+      locale: 'en-GB',
+      timezone: 'Asia/Calcutta',
+    };
+
+    const result = await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(result.additional_instructions).toBe(
+      'Buyer context — locale: en-GB, timezone: Asia/Calcutta',
+    );
+  });
+
   it('keeps non-temporal special vars in stable instructions', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
     agent.instructions = 'You are helping {{current_user}}.';

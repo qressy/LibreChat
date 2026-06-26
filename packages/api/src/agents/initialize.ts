@@ -1158,6 +1158,19 @@ export async function initializeAgent(
     }
   }
 
+  const buyerLocale = req.body?.locale as string | undefined;
+  const buyerTimezone = req.body?.timezone;
+  if (buyerLocale || buyerTimezone) {
+    const parts: string[] = [];
+    if (buyerLocale) {
+      parts.push(`locale: ${buyerLocale}`);
+    }
+    if (buyerTimezone) {
+      parts.push(`timezone: ${buyerTimezone}`);
+    }
+    appendAdditionalInstructions(agent, `Buyer context — ${parts.join(', ')}`);
+  }
+
   if (typeof agent.artifacts === 'string' && agent.artifacts !== '') {
     const artifactsPromptResult = generateArtifactsPrompt({
       endpoint: agent.provider,

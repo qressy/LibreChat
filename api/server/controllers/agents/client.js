@@ -1167,6 +1167,10 @@ class AgentClient extends BaseClient {
             messageId: this.responseMessageId,
             conversationId: this.conversationId,
             parentMessageId: this.parentMessageId,
+            // Browser locale signals forwarded so MCP servers can scope results
+            // to the buyer's region (via {{LIBRECHAT_BODY_TIMEZONE/LOCALE}} headers).
+            timezone: this.options.req?.body?.timezone,
+            locale: this.options.req?.body?.locale,
           },
           user: createSafeUser(this.options.req.user),
         },

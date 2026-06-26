@@ -683,6 +683,24 @@ describe('getMissingRuntimeBodyPlaceholderFields', () => {
       }),
     ).toEqual([]);
   });
+
+  it('maps locale and timezone BODY placeholders to requestBody keys', () => {
+    expect(
+      getMissingRuntimeBodyPlaceholderFields(
+        {
+          source: 'yaml',
+          headers: {
+            'X-Buyer-Timezone': '{{LIBRECHAT_BODY_TIMEZONE}}',
+            'X-Buyer-Locale': '{{LIBRECHAT_BODY_LOCALE}}',
+          },
+        },
+        {
+          timezone: 'Asia/Calcutta',
+          locale: 'en-GB',
+        },
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe('requiresEphemeralUserConnection', () => {

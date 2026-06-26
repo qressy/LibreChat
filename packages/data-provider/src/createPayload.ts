@@ -11,6 +11,15 @@ function getUserTimezone(): string | undefined {
   }
 }
 
+/** Resolves the browser's BCP-47 locale (e.g. `en-IN`) for region-aware tools (MCP). */
+function getUserLocale(): string | undefined {
+  try {
+    return (typeof navigator !== 'undefined' && navigator.language) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function createPayload(submission: t.TSubmission) {
   const {
     isEdited,
@@ -52,6 +61,7 @@ export default function createPayload(submission: t.TSubmission) {
     ephemeralAgent: s.isAssistantsEndpoint(endpoint) ? undefined : ephemeralAgent,
     manualSkills: s.isAssistantsEndpoint(endpoint) ? undefined : manualSkills,
     timezone: getUserTimezone(),
+    locale: getUserLocale(),
   };
 
   return { server, payload };

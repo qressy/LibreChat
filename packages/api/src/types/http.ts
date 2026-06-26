@@ -18,6 +18,8 @@ export type RequestBody = {
   endpointOption?: Partial<TEndpointOption>;
   /** Browser IANA timezone used to resolve local-time prompt variables (e.g. `{{current_datetime}}`). */
   timezone?: string;
+  /** Browser BCP-47 locale (e.g. `en-IN`) forwarded to region-aware MCP tools via header placeholders. */
+  locale?: string;
 };
 
 export type ServerRequest = Request<unknown, unknown, RequestBody> & {

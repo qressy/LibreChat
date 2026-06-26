@@ -569,6 +569,13 @@ Please follow these instructions when using tools from the respective MCP server
       const resolvedHeaders: Record<string, string> =
         'headers' in currentOptions ? { ...(currentOptions.headers || {}) } : {};
 
+      if (requestBody?.timezone) {
+        resolvedHeaders['x-buyer-timezone'] = requestBody.timezone;
+      }
+      if (requestBody?.locale) {
+        resolvedHeaders['x-buyer-locale'] = requestBody.locale;
+      }
+
       /** Refresh OBO token on each tool call to ensure it's current */
       const oboConfig = rawConfig.obo;
       if (oboConfig && oboTokenResolver && user) {
@@ -639,6 +646,7 @@ Please follow these instructions when using tools from the respective MCP server
 
       connection.setRequestHeaders(resolvedHeaders);
 
+      const mcpCallStart = Date.now();
       const result = await connection.client.request(
         {
           method: 'tools/call',
@@ -654,6 +662,7 @@ Please follow these instructions when using tools from the respective MCP server
           ...options,
         },
       );
+      logger.debug(`${logPrefix}[${toolName}] tool call completed in ${Date.now() - mcpCallStart}ms`);
       if (userId) {
         this.updateUserLastActivity(userId);
       }

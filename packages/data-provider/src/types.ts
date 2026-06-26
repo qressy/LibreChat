@@ -130,6 +130,8 @@ export type TPayload = Partial<TMessage> &
     manualSkills?: string[];
     /** Browser IANA timezone (e.g. `America/New_York`) used to resolve local-time prompt variables server-side. */
     timezone?: string;
+    /** Browser BCP-47 locale (e.g. `en-IN`) forwarded to region-aware MCP tools. */
+    locale?: string;
   };
 
 export type TEditedContent =
