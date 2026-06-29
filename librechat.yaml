@@ -37,7 +37,7 @@ interface:
 
 mcpSettings:
   allowedAddresses:
-    - 'host.docker.internal:8787'
+    - '${MCP_SERVER_HOST}'
 
 endpoints:
   custom:
@@ -140,7 +140,7 @@ modelSpecs:
 mcpServers:
   comergent:
     type: streamable-http
-    url: 'http://host.docker.internal:8787/mcp'
+    url: '${MCP_SERVER_URL}'
     title: 'Comergent Shopping'
     description: 'Shopping tools from the local Comergent MCP server.'
     timeout: 30000
