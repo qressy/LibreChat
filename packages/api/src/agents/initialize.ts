@@ -1158,17 +1158,17 @@ export async function initializeAgent(
     }
   }
 
-  const buyerLocale = req.body?.locale as string | undefined;
-  const buyerTimezone = req.body?.timezone;
-  if (buyerLocale || buyerTimezone) {
+  const userLocale = req.body?.locale as string | undefined;
+  const userTimezone = req.body?.timezone as string | undefined;
+  if (userLocale || userTimezone) {
     const parts: string[] = [];
-    if (buyerLocale) {
-      parts.push(`locale: ${buyerLocale}`);
+    if (userLocale) {
+      parts.push(`locale: ${userLocale}`);
     }
-    if (buyerTimezone) {
-      parts.push(`timezone: ${buyerTimezone}`);
+    if (userTimezone) {
+      parts.push(`timezone: ${userTimezone}`);
     }
-    appendAdditionalInstructions(agent, `Buyer context — ${parts.join(', ')}`);
+    appendAdditionalInstructions(agent, `User context — ${parts.join(', ')}`);
   }
 
   if (typeof agent.artifacts === 'string' && agent.artifacts !== '') {

@@ -14,46 +14,16 @@ import { ModelSelectorChatProvider } from './ModelSelectorChatContext';
 import { getSelectedIcon, getDisplayValue } from './utils';
 import { CustomMenu as Menu } from './CustomMenu';
 import DialogManager from './DialogManager';
+import { BRAND_LOGOS } from '~/brand';
 import { useLocalize } from '~/hooks';
 
 const defaultInterface = getConfigDefaults().interface;
 
 function ModelSelectorBranding() {
-  const { agentsMap, modelSpecs, mappedEndpoints, endpointsConfig, selectedValues } =
-    useModelSelectorContext();
-  const localize = useLocalize();
-
-  const selectedIcon = useMemo(
-    () =>
-      getSelectedIcon({
-        mappedEndpoints: mappedEndpoints ?? [],
-        selectedValues,
-        modelSpecs,
-        endpointsConfig,
-      }),
-    [mappedEndpoints, selectedValues, modelSpecs, endpointsConfig],
-  );
-
-  const selectedDisplayValue = useMemo(
-    () =>
-      getDisplayValue({
-        localize,
-        agentsMap,
-        modelSpecs,
-        selectedValues,
-        mappedEndpoints: mappedEndpoints ?? [],
-      }),
-    [localize, agentsMap, modelSpecs, selectedValues, mappedEndpoints],
-  );
-
   return (
-    <div className="my-1 flex h-9 items-center gap-2 px-3 py-2">
-      {selectedIcon != null && React.isValidElement(selectedIcon) && (
-        <div className="flex flex-shrink-0 items-center justify-center overflow-hidden">
-          {selectedIcon}
-        </div>
-      )}
-      <span className="text-sm font-semibold text-text-primary">{selectedDisplayValue}</span>
+    <div className="mb-1 mt-6 flex h-16 items-center px-3 py-1">
+      <img src={BRAND_LOGOS.light} className="h-full object-contain dark:hidden" alt="" />
+      <img src={BRAND_LOGOS.dark} className="hidden h-full object-contain dark:block" alt="" />
     </div>
   );
 }

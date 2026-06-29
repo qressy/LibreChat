@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react';
 import debounce from 'lodash/debounce';
+import { BRAND_CHAT_HINTS } from '~/brand';
 import { useRecoilValue, useRecoilState } from 'recoil';
 import type { TEndpointOption } from 'librechat-data-provider';
 import type { KeyboardEvent } from 'react';
@@ -82,7 +83,10 @@ export default function useTextarea({
 
   const isNotAppendable =
     latestMessage?.error === true && latestMessage.isCreatedByUser === true && !isAssistant;
-  // && (conversationId?.length ?? 0) > 6; // also ensures that we don't show the wrong placeholder
+
+  const isNewConversation = !conversation?.conversationId || conversation.conversationId === 'new';
+  const isRotationActive =
+    isNewConversation && !disabled && !isAgent && !isAssistant && !isNotAppendable && !placeholder;
 
   useEffect(() => {
     const prompt = activePrompt ?? '';
@@ -123,14 +127,7 @@ export default function useTextarea({
         return placeholder;
       }
 
-      const sender =
-        isAssistant || isAgent
-          ? getEntityName({ name: entityName, isAgent, localize })
-          : getSender(conversation as TEndpointOption);
-
-      return `${localize('com_endpoint_message_new', {
-        0: sender ? sender : localize('com_endpoint_ai'),
-      })}`;
+      return isNewConversation ? BRAND_CHAT_HINTS[0] : 'Ask me anything...';
     };
 
     const placeholderText = getPlaceholderText();
@@ -167,6 +164,39 @@ export default function useTextarea({
     isNotAppendable,
     placeholder,
   ]);
+
+  useEffect(() => {
+    if (!isRotationActive) {
+      return;
+    }
+    const ta = textAreaRef.current;
+    if (!ta) {
+      return;
+    }
+
+    let idx = 0;
+    ta.setAttribute('placeholder', BRAND_CHAT_HINTS[0]);
+
+    const rotate = () => {
+      if (ta.value) {
+        return;
+      }
+      idx = (idx + 1) % BRAND_CHAT_HINTS.length;
+      ta.classList.add('placeholder-fade');
+      setTimeout(() => {
+        if (!ta.value) {
+          ta.setAttribute('placeholder', BRAND_CHAT_HINTS[idx]);
+        }
+        ta.classList.remove('placeholder-fade');
+      }, 450);
+    };
+
+    const interval = setInterval(rotate, 4500);
+    return () => {
+      clearInterval(interval);
+      ta.classList.remove('placeholder-fade');
+    };
+  }, [isRotationActive, textAreaRef]);
 
   const handleKeyDown = useCallback(
     (e: KeyEvent) => {

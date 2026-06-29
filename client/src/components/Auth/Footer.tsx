@@ -11,7 +11,7 @@ function Footer({ startupConfig }: { startupConfig: TStartupConfig | null | unde
 
   const privacyPolicyRender = privacyPolicy?.externalUrl && (
     <a
-      className="text-sm text-green-600 underline decoration-transparent transition-all duration-200 hover:text-green-700 hover:decoration-green-700 focus:text-green-700 focus:decoration-green-700 dark:text-green-500 dark:hover:text-green-400 dark:hover:decoration-green-400 dark:focus:text-green-400 dark:focus:decoration-green-400"
+      className="text-sm text-brand-purple underline decoration-transparent transition-all duration-200 hover:text-orange-600 hover:decoration-orange-600 focus:text-orange-600 focus:decoration-orange-600 dark:text-orange-400 dark:hover:text-orange-300 dark:hover:decoration-orange-300 dark:focus:text-orange-300 dark:focus:decoration-orange-300"
       href={privacyPolicy.externalUrl}
       // Removed for WCAG compliance
       // target={privacyPolicy.openNewTab ? '_blank' : undefined}
@@ -23,7 +23,7 @@ function Footer({ startupConfig }: { startupConfig: TStartupConfig | null | unde
 
   const termsOfServiceRender = termsOfService?.externalUrl && (
     <a
-      className="text-sm text-green-600 underline decoration-transparent transition-all duration-200 hover:text-green-700 hover:decoration-green-700 focus:text-green-700 focus:decoration-green-700 dark:text-green-500 dark:hover:text-green-400 dark:hover:decoration-green-400 dark:focus:text-green-400 dark:focus:decoration-green-400"
+      className="text-sm text-brand-purple underline decoration-transparent transition-all duration-200 hover:text-orange-600 hover:decoration-orange-600 focus:text-orange-600 focus:decoration-orange-600 dark:text-orange-400 dark:hover:text-orange-300 dark:hover:decoration-orange-300 dark:focus:text-orange-300 dark:focus:decoration-orange-300"
       href={termsOfService.externalUrl}
       // Removed for WCAG compliance
       // target={termsOfService.openNewTab ? '_blank' : undefined}

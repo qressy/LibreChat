@@ -84,7 +84,7 @@ modelSpecs:
       label: 'Comergent Shopping Assistant'
       default: true
       showOnLanding: false
-      iconURL: 'https://www.comergent.ai/favicon.ico'
+      iconURL: '{"light":"https://www.comergent.ai/favicon.ico","dark":"/assets/icon-dark.svg"}'
       showIconInHeader: true
       hideBadgeRow: true
       mcpServers:

@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  body {
+    font-family: 'Geist', 'Inter', sans-serif;
+  }
+}
+
 .message-render {
   scroll-margin-top: 4rem;
 }
@@ -55,7 +61,11 @@
   --amber-800: #92400e;
   --amber-900: #78350f;
   --amber-950: #451a03;
-  --brand-purple: #ab68ff;
+  --brand-purple: #fb923c;
+  --brand-purple-subtle: rgba(251, 146, 60, 0.1);
+  --brand-purple-subtle-border: rgba(251, 146, 60, 0.2);
+  --brand-primary-dark: #f97a1f;
+  --brand-primary-darker: #e56d16;
   --gizmo-gray-500: #999;
   --gizmo-gray-600: #666;
   --gizmo-gray-950: #0f0f0f;
@@ -67,7 +77,7 @@
   --markdown-font-size: 1rem;
 }
 html {
-  --brand-purple: #ab68ff;
+  --brand-purple: #fb923c;
   --presentation: var(--white);
   --text-primary: var(--gray-800);
   --text-secondary: var(--gray-600);
@@ -91,8 +101,8 @@ html {
   --surface-tertiary: var(--gray-100);
   --surface-tertiary-alt: var(--white);
   --surface-dialog: var(--white);
-  --surface-submit: var(--green-700);
-  --surface-submit-hover: var(--green-800);
+  --surface-submit: var(--brand-primary-dark);
+  --surface-submit-hover: var(--brand-primary-darker);
   --surface-destructive: var(--red-700);
   --surface-destructive-hover: var(--red-800);
   --surface-chat: var(--white);
@@ -130,7 +140,7 @@ html {
   --switch-unchecked: 0 0% 58%;
 }
 .dark {
-  --brand-purple: #ab68ff;
+  --brand-purple: #fb923c;
   --presentation: var(--gray-800);
   --text-primary: var(--gray-100);
   --text-secondary: var(--gray-300);
@@ -153,8 +163,8 @@ html {
   --surface-tertiary: var(--gray-700);
   --surface-tertiary-alt: var(--gray-700);
   --surface-dialog: var(--gray-850);
-  --surface-submit: var(--green-700);
-  --surface-submit-hover: var(--green-800);
+  --surface-submit: var(--brand-primary-dark);
+  --surface-submit-hover: var(--brand-primary-darker);
   --surface-destructive: var(--red-800);
   --surface-destructive-hover: var(--red-900);
   --surface-chat: var(--gray-700);
@@ -2961,4 +2971,12 @@ html {
 
 .sharepoint-picker-bg {
   background-color: #f5f5f5;
+}
+
+/* Rotating placeholder fade transition */
+textarea::placeholder {
+  transition: opacity 0.45s ease;
+}
+textarea.placeholder-fade::placeholder {
+  opacity: 0;
 }

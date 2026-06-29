@@ -1,5 +1,6 @@
 import React, { memo, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
+import { parseThemeIconURL } from '~/utils/icons';
 import { icons } from '~/hooks/Endpoint/Icons';
 
 export const URLIcon = memo(
@@ -41,6 +42,25 @@ export const URLIcon = memo(
               <AlertCircle size={10} className="text-white" aria-hidden="true" />
             </div>
           )}
+        </div>
+      );
+    }
+
+    const themeURLs = parseThemeIconURL(iconURL);
+    if (themeURLs) {
+      const imgProps = {
+        alt: altName ?? 'Icon',
+        style: imageStyle,
+        onError: handleImageError,
+        loading: 'lazy' as const,
+        decoding: 'async' as const,
+        width: Number(containerStyle.width) || 20,
+        height: Number(containerStyle.height) || 20,
+      };
+      return (
+        <div className={className} style={containerStyle}>
+          <img src={themeURLs.light} {...imgProps} className="object-cover dark:hidden" />
+          <img src={themeURLs.dark} {...imgProps} className="object-cover hidden dark:block" />
         </div>
       );
     }

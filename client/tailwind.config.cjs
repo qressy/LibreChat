@@ -11,13 +11,9 @@ module.exports = {
   darkMode: ['class'],
   theme: {
     fontFamily: {
-      sans: ['Inter', 'sans-serif'],
+      sans: ['Geist', 'Inter', 'sans-serif'],
       mono: ['Roboto Mono', 'monospace'],
     },
-    // fontFamily: {
-    //   sans: ['Söhne', 'sans-serif'],
-    //   mono: ['Söhne Mono', 'monospace'],
-    // },
     extend: {
       width: {
         authPageWidth: '370px',
@@ -92,6 +88,8 @@ module.exports = {
           900: '#031f29',
         },
         'brand-purple': 'var(--brand-purple)',
+        'brand-purple-subtle': 'var(--brand-purple-subtle)',
+        'brand-purple-subtle-border': 'var(--brand-purple-subtle-border)',
         presentation: 'var(--presentation)',
         'text-primary': 'var(--text-primary)',
         'text-secondary': 'var(--text-secondary)',

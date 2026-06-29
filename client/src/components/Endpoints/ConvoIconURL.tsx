@@ -1,7 +1,7 @@
 import { memo, useMemo } from 'react';
 import { URLIcon } from '~/components/Endpoints/URLIcon';
 import { icons } from '~/hooks/Endpoint/Icons';
-import { isImageURL } from '~/utils/icons';
+import { isImageURL, parseThemeIconURL } from '~/utils/icons';
 
 interface ConvoIconURLProps {
   iconURL?: string;
@@ -40,7 +40,7 @@ const ConvoIconURL: React.FC<ConvoIconURLProps> = ({
   context,
 }) => {
   const Icon = useMemo(() => icons[iconURL] ?? icons.unknown, [iconURL]);
-  const isURL = useMemo(() => isImageURL(iconURL), [iconURL]);
+  const isURL = useMemo(() => !!parseThemeIconURL(iconURL) || isImageURL(iconURL), [iconURL]);
   if (isURL) {
     return (
       <URLIcon

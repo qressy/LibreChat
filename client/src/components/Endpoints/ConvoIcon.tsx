@@ -4,7 +4,7 @@ import type * as t from 'librechat-data-provider';
 import { getIconKey, getEntity, getIconEndpoint } from '~/utils';
 import ConvoIconURL from '~/components/Endpoints/ConvoIconURL';
 import { icons } from '~/hooks/Endpoint/Icons';
-import { isImageURL } from '~/utils/icons';
+import { isImageURL, parseThemeIconURL } from '~/utils/icons';
 
 export default function ConvoIcon({
   conversation,
@@ -52,7 +52,7 @@ export default function ConvoIcon({
 
   return (
     <>
-      {isImageURL(iconURL) ? (
+      {(isImageURL(iconURL) || !!parseThemeIconURL(iconURL)) ? (
         <ConvoIconURL
           iconURL={iconURL}
           modelLabel={conversation?.chatGptLabel ?? conversation?.modelLabel ?? ''}

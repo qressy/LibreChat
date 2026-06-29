@@ -6,6 +6,7 @@ import { Constants } from 'librechat-data-provider';
 import { useToastContext, useMediaQuery } from '@librechat/client';
 import type { TConversation } from 'librechat-data-provider';
 import { useNavigateToConvo, useLocalize, useShiftKey } from '~/hooks';
+import { BRAND_HIDE_CONVO_ICON } from '~/brand';
 import ConversationEndpointIcon from './ConversationEndpointIcon';
 import { useUpdateConversationMutation } from '~/data-provider';
 import { areConversationRenderPropsEqual } from './utils';
@@ -272,7 +273,9 @@ function Conversation({
           isSmallScreen={isSmallScreen}
           localize={localize}
         >
-          <ConversationEndpointIcon conversation={conversation} size={20} context="menu-item" />
+          {!BRAND_HIDE_CONVO_ICON && (
+            <ConversationEndpointIcon conversation={conversation} size={20} context="menu-item" />
+          )}
         </ConvoLink>
       )}
       {conversation.pinned === true && (
