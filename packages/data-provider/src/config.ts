@@ -1258,6 +1258,7 @@ export const interfaceSchema = z
         }),
       ])
       .optional(),
+    shipsFromSelector: z.boolean().optional(),
   })
   .default({
     modelSelect: true,

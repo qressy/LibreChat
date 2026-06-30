@@ -15,3 +15,7 @@ export const BRAND_CHAT_HINTS = [
 ];
 
 export const BRAND_HIDE_CONVO_ICON = true;
+
+export const BRAND_HIDE_MESSAGE_LABEL = true;
+
+export const BRAND_SHIPS_FROM_SELECTOR = true;

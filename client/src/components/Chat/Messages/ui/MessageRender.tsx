@@ -12,6 +12,7 @@ import SiblingSwitch from '~/components/Chat/Messages/SiblingSwitch';
 import HoverButtons from '~/components/Chat/Messages/HoverButtons';
 import MessageIcon from '~/components/Chat/Messages/MessageIcon';
 import SubRow from '~/components/Chat/Messages/SubRow';
+import { BRAND_HIDE_MESSAGE_LABEL } from '~/brand';
 import { fontSizeAtom } from '~/store/fontSize';
 import { MessageContext } from '~/Providers';
 import store from '~/store';
@@ -211,7 +212,7 @@ const MessageRender = memo(function MessageRender({
           msg.isCreatedByUser ? 'user-turn' : 'agent-turn',
         )}
       >
-        {!hasParallelContent && (
+        {!hasParallelContent && !BRAND_HIDE_MESSAGE_LABEL && (
           <h2 className={cn('select-none font-semibold', fontSize)}>
             <span className="sr-only">{getHeaderPrefixForScreenReader(msg, localize)}</span>
             {messageLabel}

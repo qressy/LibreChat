@@ -1171,6 +1171,14 @@ export async function initializeAgent(
     appendAdditionalInstructions(agent, `User context — ${parts.join(', ')}`);
   }
 
+  const userShipsFrom = req.body?.shipsFrom as string | undefined;
+  if (userShipsFrom) {
+    appendAdditionalInstructions(
+      agent,
+      `Shipping origin preference: ships_from country = ${userShipsFrom}. Always include "ships_from": [{"country": "${userShipsFrom}"}] in search_products catalog arguments unless the buyer explicitly requests a different country.`,
+    );
+  }
+
   if (typeof agent.artifacts === 'string' && agent.artifacts !== '') {
     const artifactsPromptResult = generateArtifactsPrompt({
       endpoint: agent.provider,

@@ -20,6 +20,18 @@ function getUserLocale(): string | undefined {
   }
 }
 
+/** Reads the ships_from country code. 'global' sentinel means no filter; absent means derive from locale. */
+function getShipsFrom(): string | undefined {
+  try {
+    if (typeof localStorage === 'undefined') return undefined;
+    const stored = localStorage.getItem('comergent_ships_from');
+    if (stored === 'global' || stored === null) return undefined;
+    return stored || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function createPayload(submission: t.TSubmission) {
   const {
     isEdited,
@@ -62,6 +74,7 @@ export default function createPayload(submission: t.TSubmission) {
     manualSkills: s.isAssistantsEndpoint(endpoint) ? undefined : manualSkills,
     timezone: getUserTimezone(),
     locale: getUserLocale(),
+    shipsFrom: getShipsFrom(),
   };
 
   return { server, payload };

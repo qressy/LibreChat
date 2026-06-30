@@ -132,6 +132,8 @@ export type TPayload = Partial<TMessage> &
     timezone?: string;
     /** Browser BCP-47 locale (e.g. `en-IN`) forwarded to region-aware MCP tools. */
     locale?: string;
+    /** User-selected ISO 3166-1 alpha-2 country code for ships_from filter (e.g. `IN`). */
+    shipsFrom?: string;
   };
 
 export type TEditedContent =

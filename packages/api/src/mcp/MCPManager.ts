@@ -621,6 +621,9 @@ Please follow these instructions when using tools from the respective MCP server
       if (requestBody?.locale) {
         resolvedHeaders['x-buyer-locale'] = requestBody.locale;
       }
+      if (requestBody?.shipsFrom) {
+        resolvedHeaders['x-buyer-ships-from'] = requestBody.shipsFrom;
+      }
 
       /** Refresh OBO token on each tool call to ensure it's current */
       const oboConfig = rawConfig.obo;

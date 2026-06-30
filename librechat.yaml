@@ -21,6 +21,7 @@ interface:
   skills: false
   showProcessingSteps: true
   sharedLinks: false
+  shipsFromSelector: true
   defaultPinnedTools:
     - 'mcp'
   peoplePicker:
@@ -116,8 +117,8 @@ modelSpecs:
           Set "context.intent" from the buyer's goal (e.g. "gift", "running", "office") to improve relevance. Use "filters.price" (minor units) for budget.
           CRITICAL: Omit "businessUrl" entirely for global catalog searches. Only include it when the buyer names a specific merchant.
 
-          ## Buyer Geo Context
-          LibreChat forwards the buyer's locale/timezone to the MCP server automatically. Do NOT infer or set context.address_country, context.currency, context.language, or filters.ships_to yourself unless the buyer explicitly asks for a different country/region. The MCP server injects the correct defaults.
+          ## Buyer Context
+          LibreChat sends locale, timezone, and (when set) a ships_from country preference in your additional_instructions. If you see "Shipping origin preference" there, always include that ships_from value in search_products catalog arguments. Do NOT infer context.address_country, context.currency, context.language, or filters.ships_to yourself unless the buyer explicitly asks.
 
           ### show_cart_and_checkout_mcp_comergent — call right after create_cart, or whenever the buyer wants to see their cart / check out
           {"businessUrl": "<merchant businessUrl>", "cartId": "<the id from create_cart's result>"}

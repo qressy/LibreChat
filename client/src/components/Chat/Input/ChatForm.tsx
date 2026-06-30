@@ -26,6 +26,8 @@ import { cn, getModelSpec, removeFocusRings } from '~/utils';
 import { useGetStartupConfig } from '~/data-provider';
 import { mainTextareaId, BadgeItem } from '~/common';
 import PendingQuoteChips from './PendingQuoteChips';
+import { BRAND_SHIPS_FROM_SELECTOR } from '~/brand';
+import CountrySelector from './CountrySelector';
 import AttachFileChat from './Files/AttachFileChat';
 import FileFormChat from './Files/FileFormChat';
 import TextareaHeader from './TextareaHeader';
@@ -375,6 +377,7 @@ const ChatForm = memo(function ChatForm({
                   setFilesLoading={setFilesLoading}
                 />
               </div>
+              {(BRAND_SHIPS_FROM_SELECTOR || startupConfig?.interface?.shipsFromSelector === true) && <CountrySelector />}
               <BadgeRow
                 showEphemeralBadges={
                   !!endpoint &&
