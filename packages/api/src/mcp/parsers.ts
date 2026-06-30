@@ -156,6 +156,32 @@ function parseAsString(result: t.MCPToolCallResponse): string {
 }
 
 /**
+ * MCP Apps renders only `ui://` resources whose mime type is HTML (mime omitted defaults to HTML),
+ * the single renderable resource type the spec defines. Used both when attaching a result resource
+ * and when deciding whether a result carries an app the apps toggle must gate.
+ */
+export function isRenderableUiResource(item: t.ToolContentPart): boolean {
+  if (item.type !== 'resource') {
+    return false;
+  }
+  const uri = item.resource?.uri;
+  if (typeof uri !== 'string' || !uri.startsWith('ui://')) {
+    return false;
+  }
+  const mimeType =
+    typeof item.resource.mimeType === 'string' ? item.resource.mimeType : 'text/html';
+  return mimeType.includes('html');
+}
+
+export function resultHasRenderableUiResource(result: t.MCPToolCallResponse): boolean {
+  const content = result?.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((item) => isRenderableUiResource(item as t.ToolContentPart));
+}
+
+/**
  * Converts MCPToolCallResponse content into a plain-text string plus optional artifacts
  * (images, UI resources). All providers receive string content; images are separated into
  * artifacts and merged back by the agents package via formatArtifactPayload / formatAnthropicArtifactContent.
@@ -174,6 +200,7 @@ export function formatToolContent(
     csp?: UIResource['csp'];
     permissions?: UIResource['permissions'];
     toolArgs?: Record<string, unknown>;
+    enableApps?: boolean;
   },
 ): t.FormattedContentResult {
   if (!RECOGNIZED_PROVIDERS.has(provider)) {
@@ -216,12 +243,10 @@ export function formatToolContent(
     },
 
     resource: (item) => {
-      // MCP Apps defines a single renderable resource type, text/html;profile=mcp-app, and the
-      // host renders HTML only. ui:// resources with other mime types (json, remote-dom) have no
-      // renderer, so they fall through to plain resource text instead of an unrenderable marker.
-      const mimeType =
-        typeof item.resource.mimeType === 'string' ? item.resource.mimeType : 'text/html';
-      const isUiResource = item.resource.uri.startsWith('ui://') && mimeType.includes('html');
+      // ui:// resources that are not renderable apps (other mime types) or that arrive for a
+      // scope with apps disabled fall through to plain resource text rather than an unrenderable
+      // or admin-suppressed app marker.
+      const isUiResource = metadata?.enableApps !== false && isRenderableUiResource(item);
       const resourceText: string[] = [];
 
       if (isUiResource) {
@@ -239,18 +264,27 @@ export function formatToolContent(
         const itemUi = (item.resource._meta as { ui?: Record<string, unknown> } | undefined)?.ui as
           | { csp?: UIResource['csp']; permissions?: UIResource['permissions'] }
           | undefined;
+        // Only the text/html;profile=mcp-app profile runs the App Bridge on the client
+        // (isMcpAppResource); a plain text/html ui:// resource renders as a static srcDoc, so the
+        // tool result/context fields would be dead, misleading metadata on it. Classify the same
+        // way on both sides and attach the bridge payload only for the app profile.
+        const isAppBacked = (item.resource.mimeType ?? '').includes('profile=mcp-app');
         const uiResource: UIResource = {
           ...item.resource,
           resourceId,
-          serverName: metadata?.serverName,
-          toolName: metadata?.toolName,
-          structuredContent: result?.structuredContent,
-          content: result?.content,
-          isError: result?.isError,
-          resultMeta: (result as { _meta?: Record<string, unknown> })?._meta,
           csp: itemUi?.csp ?? metadata?.csp,
           permissions: itemUi?.permissions ?? metadata?.permissions,
-          toolArgs: metadata?.toolArgs,
+          ...(isAppBacked
+            ? {
+                serverName: metadata?.serverName,
+                toolName: metadata?.toolName,
+                structuredContent: result?.structuredContent,
+                content: result?.content,
+                isError: result?.isError,
+                resultMeta: (result as { _meta?: Record<string, unknown> })?._meta,
+                toolArgs: metadata?.toolArgs,
+              }
+            : {}),
         };
         uiResources.push(uiResource);
         resourceText.push(`UI Resource ID: ${resourceId}`);

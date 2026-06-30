@@ -30,10 +30,12 @@ const mockRegistryInstance = {
   shouldEnableSSRFProtection: mockShouldEnableSSRFProtection,
   getAllowedDomains: mockGetAllowedDomains,
   getAllowedAddresses: mockGetAllowedAddresses,
+  getAppsEnabled: jest.fn().mockReturnValue(true),
   resolveAllowlists: jest.fn(async () => ({
     allowedDomains: mockGetAllowedDomains(),
     allowedAddresses: mockGetAllowedAddresses(),
     useSSRFProtection: mockShouldEnableSSRFProtection(),
+    appsEnabled: true,
   })),
 };
 
@@ -122,6 +124,7 @@ describe('ConnectionsRepository', () => {
           useSSRFProtection: false,
           allowedDomains: null,
           allowedAddresses: null,
+          enableApps: true,
           dbSourced: false,
         },
         undefined,
@@ -147,6 +150,7 @@ describe('ConnectionsRepository', () => {
           useSSRFProtection: false,
           allowedDomains: null,
           allowedAddresses: null,
+          enableApps: true,
           dbSourced: false,
         },
         undefined,
@@ -189,6 +193,7 @@ describe('ConnectionsRepository', () => {
           useSSRFProtection: false,
           allowedDomains: null,
           allowedAddresses: null,
+          enableApps: true,
           dbSourced: false,
         },
         undefined,

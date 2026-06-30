@@ -4,7 +4,6 @@ import { logger } from '@librechat/data-schemas';
 import { fetch as undiciFetch, Agent, ProxyAgent } from 'undici';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/app-bridge';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
@@ -22,6 +21,7 @@ import type {
   Dispatcher,
 } from 'undici';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { ClientCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPOAuthTokens } from './oauth/types';
 import type * as t from './types';
 import { createSSRFSafeUndiciConnect, isSSRFTarget, resolveHostnameSSRF } from '~/auth';
@@ -29,6 +29,7 @@ import { runOutsideTracing } from '~/utils/tracing';
 import { isAddressAllowed } from '~/auth/domain';
 import { sanitizeUrlForLogging } from './utils';
 import { withTimeout } from '~/utils/promise';
+import { RESOURCE_MIME_TYPE } from './apps';
 import { mcpConfig } from './mcpConfig';
 
 type FetchLike = (url: string | URL, init?: RequestInit) => Promise<Response>;
@@ -1120,6 +1121,7 @@ interface MCPConnectionParams {
   oauthTokens?: MCPOAuthTokens | null;
   useSSRFProtection?: boolean;
   allowedAddresses?: string[] | null;
+  enableApps?: boolean;
   ephemeralConnection?: boolean;
 }
 
@@ -1167,6 +1169,12 @@ export class MCPConnection extends EventEmitter {
    * createdAt alone (stable until reconnect) cannot.
    */
   public toolListVersion = 0;
+
+  /**
+   * Bumped on every resources/list_changed notification so consumers caching a server's advertised
+   * resources refresh their authorization data when resources are added or removed.
+   */
+  public resourceListVersion = 0;
 
   private static circuitBreakers: Map<string, CircuitBreakerState> = new Map();
 
@@ -1282,21 +1290,18 @@ export class MCPConnection extends EventEmitter {
     if (params.oauthTokens) {
       this.oauthTokens = params.oauthTokens;
     }
+    // io.modelcontextprotocol/ui is a per-session host capability, so it tracks the instance-wide
+    // apps setting; per-tenant apps policy is enforced downstream, not renegotiated per request.
+    const appsEnabled = params.enableApps !== false;
+    const capabilities: ClientCapabilities = appsEnabled
+      ? { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: [RESOURCE_MIME_TYPE] } } }
+      : {};
     this.client = new Client(
       {
         name: '@librechat/api-client',
         version: '1.2.3',
       },
-      {
-        // Advertise MCP Apps support so servers using the ext-apps graceful-degradation path
-        // (getUiCapability) expose app-enhanced tools. The capability rides on the `extensions`
-        // field keyed by ext-apps EXTENSION_ID.
-        capabilities: {
-          extensions: {
-            'io.modelcontextprotocol/ui': { mimeTypes: [RESOURCE_MIME_TYPE] },
-          },
-        },
-      },
+      { capabilities },
     );
 
     this.setupEventListeners();
@@ -1867,6 +1872,7 @@ export class MCPConnection extends EventEmitter {
 
   private subscribeToResources(): void {
     this.client.setNotificationHandler(ResourceListChangedNotificationSchema, async () => {
+      this.resourceListVersion += 1;
       this.emit('resourcesChanged');
     });
   }

@@ -1,8 +1,15 @@
 const path = require('path');
 const { logger } = require('@librechat/data-schemas');
 const { CacheKeys, Constants } = require('librechat-data-provider');
-const { getUserMCPAuthMap } = require('@librechat/api');
+const {
+  getUserMCPAuthMap,
+  readAppResource,
+  listAppResources,
+  listAppResourceTemplates,
+  callAppTool,
+} = require('@librechat/api');
 const { getMCPManager, getFlowStateManager } = require('~/config');
+const { getAppConfig } = require('~/server/services/Config');
 const { resolveConfigServers } = require('~/server/services/MCP');
 const {
   findPluginAuthsByKeys,
@@ -17,15 +24,13 @@ const { getLogStores } = require('~/cache');
 const MCP_INVALID_REQUEST = -32600;
 
 /**
- * Resolves the request-scoped config, the user's custom variables, and the OAuth flow/token
- * context for a server so app follow-up requests can connect to config-sourced servers and
- * re-resolve credentialed or OAuth connections even when the original tool-call connection is gone.
+ * Resolves the request-scoped config and auth context so app follow-up requests can reconnect to
+ * config-sourced servers even when the original tool-call connection is gone.
  */
 const resolveAppContext = async (req, serverName) => {
   const userId = req.user?.id;
-  // Fail closed on config resolution: an app request targets one server by name, so a transient
-  // failure must reject rather than fall back to the base config for that name and proxy to the
-  // wrong server. Auth map resolution may still degrade, since a missing var fails closed downstream.
+  // Fail closed on config resolution: a transient failure must reject rather than fall back to the
+  // base config and proxy to the wrong server. (Auth map resolution fails closed downstream.)
   const [configServers, userMCPAuthMap] = await Promise.all([
     resolveConfigServers(req, { throwOnError: true }),
     Promise.resolve()
@@ -47,33 +52,19 @@ const readMCPResource = async (req, res) => {
     }
 
     const { serverName, uri } = req.body;
-    if (!serverName || !uri) {
-      return res.status(400).json({ error: 'serverName and uri are required' });
-    }
-    // The serverResources capability lets an app read any resource the connected MCP server
-    // exposes (ui:// templates plus supporting data such as file:// or custom schemes), so the
-    // proxy only requires a non-empty string and leaves resource authorization to the server.
-    if (typeof uri !== 'string' || uri.length === 0) {
-      return res.status(400).json({ error: 'uri must be a non-empty string' });
-    }
-
-    const mcpManager = getMCPManager();
-    const { configServers, customUserVars, flowManager, tokenMethods } = await resolveAppContext(
-      req,
-      serverName,
-    );
-    const result = await mcpManager.readResource({
+    const ctx = {
       userId,
       serverName,
-      uri,
       user: req.user,
-      configServers,
-      customUserVars,
-      flowManager,
-      tokenMethods,
-    });
+      ...(await resolveAppContext(req, serverName)),
+    };
+    const result = await readAppResource(getMCPManager(), ctx, uri);
     return res.json(result);
   } catch (error) {
+    // A denied read is an expected client error, so return 400 and skip the error-level log.
+    if (error && typeof error === 'object' && error.code === MCP_INVALID_REQUEST) {
+      return res.status(400).json({ error: error.message });
+    }
     logger.error('[readMCPResource] Error:', error);
     return res.status(500).json({ error: 'Failed to read resource' });
   }
@@ -88,30 +79,18 @@ const listMCPResources = async (req, res) => {
     }
 
     const { serverName, cursor } = req.body;
-    if (!serverName) {
-      return res.status(400).json({ error: 'serverName is required' });
-    }
-    if (cursor !== undefined && typeof cursor !== 'string') {
-      return res.status(400).json({ error: 'cursor must be a string' });
-    }
-
-    const mcpManager = getMCPManager();
-    const { configServers, customUserVars, flowManager, tokenMethods } = await resolveAppContext(
-      req,
-      serverName,
-    );
-    const result = await mcpManager.listResources({
+    const ctx = {
       userId,
       serverName,
       user: req.user,
-      cursor,
-      configServers,
-      customUserVars,
-      flowManager,
-      tokenMethods,
-    });
+      ...(await resolveAppContext(req, serverName)),
+    };
+    const result = await listAppResources(getMCPManager(), ctx, cursor);
     return res.json(result);
   } catch (error) {
+    if (error && typeof error === 'object' && error.code === MCP_INVALID_REQUEST) {
+      return res.status(400).json({ error: error.message });
+    }
     logger.error('[listMCPResources] Error:', error);
     return res.status(500).json({ error: 'Failed to list resources' });
   }
@@ -126,30 +105,18 @@ const listMCPResourceTemplates = async (req, res) => {
     }
 
     const { serverName, cursor } = req.body;
-    if (!serverName) {
-      return res.status(400).json({ error: 'serverName is required' });
-    }
-    if (cursor !== undefined && typeof cursor !== 'string') {
-      return res.status(400).json({ error: 'cursor must be a string' });
-    }
-
-    const mcpManager = getMCPManager();
-    const { configServers, customUserVars, flowManager, tokenMethods } = await resolveAppContext(
-      req,
-      serverName,
-    );
-    const result = await mcpManager.listResourceTemplates({
+    const ctx = {
       userId,
       serverName,
       user: req.user,
-      cursor,
-      configServers,
-      customUserVars,
-      flowManager,
-      tokenMethods,
-    });
+      ...(await resolveAppContext(req, serverName)),
+    };
+    const result = await listAppResourceTemplates(getMCPManager(), ctx, cursor);
     return res.json(result);
   } catch (error) {
+    if (error && typeof error === 'object' && error.code === MCP_INVALID_REQUEST) {
+      return res.status(400).json({ error: error.message });
+    }
     logger.error('[listMCPResourceTemplates] Error:', error);
     return res.status(500).json({ error: 'Failed to list resource templates' });
   }
@@ -164,33 +131,13 @@ const appToolCall = async (req, res) => {
     }
 
     const { serverName, toolName, arguments: toolArgs } = req.body;
-    if (!serverName || !toolName) {
-      return res.status(400).json({ error: 'serverName and toolName are required' });
-    }
-    if (
-      toolArgs !== undefined &&
-      toolArgs !== null &&
-      (typeof toolArgs !== 'object' || Array.isArray(toolArgs))
-    ) {
-      return res.status(400).json({ error: 'arguments must be an object' });
-    }
-
-    const mcpManager = getMCPManager();
-    const { configServers, customUserVars, flowManager, tokenMethods } = await resolveAppContext(
-      req,
-      serverName,
-    );
-    const result = await mcpManager.appToolCall({
+    const ctx = {
       userId,
       serverName,
-      toolName,
-      toolArguments: toolArgs || {},
       user: req.user,
-      configServers,
-      customUserVars,
-      flowManager,
-      tokenMethods,
-    });
+      ...(await resolveAppContext(req, serverName)),
+    };
+    const result = await callAppTool(getMCPManager(), ctx, toolName, toolArgs);
     return res.json(result);
   } catch (error) {
     logger.error('[appToolCall] Error:', error);
@@ -249,10 +196,35 @@ const serveMCPSandbox = async (_req, res) => {
   }
 };
 
+/**
+ * Blocks MCP App endpoints when an admin has disabled apps via `mcpSettings.apps: false`.
+ * Defense-in-depth alongside the connection-level capability gate: even if a server still
+ * advertises UI tools, the host refuses to proxy resource reads and app tool calls while off.
+ */
+const requireMCPAppsEnabled = async (req, res, next) => {
+  try {
+    const appConfig =
+      req.config ??
+      (await getAppConfig({
+        role: req.user?.role,
+        userId: req.user?.id,
+        tenantId: req.user?.tenantId,
+      }));
+    if (appConfig?.mcpSettings?.apps === false) {
+      return res.status(403).json({ error: 'MCP Apps are disabled' });
+    }
+    return next();
+  } catch (error) {
+    logger.error('[requireMCPAppsEnabled] Error:', error);
+    return res.status(500).json({ error: 'Failed to resolve MCP Apps configuration' });
+  }
+};
+
 module.exports = {
   readMCPResource,
   listMCPResources,
   listMCPResourceTemplates,
   appToolCall,
   serveMCPSandbox,
+  requireMCPAppsEnabled,
 };

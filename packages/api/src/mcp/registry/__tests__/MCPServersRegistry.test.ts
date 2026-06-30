@@ -191,6 +191,7 @@ describe('MCPServersRegistry', () => {
         undefined,
         undefined,
         undefined,
+        true,
       );
     });
 
@@ -240,6 +241,7 @@ describe('MCPServersRegistry', () => {
         allowedDomains: ['yaml.com'],
         allowedAddresses: ['10.0.0.0/8'],
         useSSRFProtection: false,
+        appsEnabled: true,
       });
     });
 
@@ -249,6 +251,7 @@ describe('MCPServersRegistry', () => {
         allowedDomains: undefined,
         allowedAddresses: undefined,
         useSSRFProtection: true,
+        appsEnabled: true,
       });
     });
 
@@ -266,6 +269,7 @@ describe('MCPServersRegistry', () => {
         allowedDomains: ['admin-added.com'],
         allowedAddresses: ['172.16.0.0/12'],
         useSSRFProtection: false,
+        appsEnabled: true,
       });
     });
 
@@ -277,6 +281,7 @@ describe('MCPServersRegistry', () => {
         allowedDomains: ['yaml.com'],
         allowedAddresses: null,
         useSSRFProtection: false,
+        appsEnabled: true,
       });
     });
 
@@ -303,6 +308,7 @@ describe('MCPServersRegistry', () => {
         undefined,
         ['admin-added.com'],
         ['10.0.0.0/8'],
+        true,
       );
     });
 
@@ -633,6 +639,7 @@ describe('MCPServersRegistry', () => {
         undefined,
         undefined,
         undefined,
+        true,
       );
       expect(result['config-only-server']).toBeDefined();
       expect(result['config-only-server'].iconPath).toBe(

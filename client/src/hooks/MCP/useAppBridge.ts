@@ -16,7 +16,7 @@ import {
   listMCPResources,
   listMCPResourceTemplates,
 } from '~/utils/mcpApps';
-import { useOptionalMessagesOperations } from '~/Providers';
+import { useOptionalMessagesOperations, useIsMessagesViewReadOnly } from '~/Providers';
 import { logger } from '~/utils';
 import store from '~/store';
 
@@ -35,6 +35,9 @@ export function useAppBridge(
 ) {
   const user = useRecoilValue(store.user);
   const { ask } = useOptionalMessagesOperations();
+  // Read-only views (shared transcripts, /search) must not let the embedded app proxy tool calls
+  // or resource reads against the viewer's MCP servers with the viewer's auth.
+  const readOnly = useIsMessagesViewReadOnly();
   const queryClient = useQueryClient();
   const bridgeRef = useRef<AppBridge | null>(null);
   // The bridge mounts once per resourceId and reads these only inside its handlers, so a changed
@@ -46,7 +49,9 @@ export function useAppBridge(
   const onTeardownRef = useRef(onTeardown);
   const toolArgsRef = useRef(toolArgs);
   const toolResultRef = useRef(toolResult);
+  const readOnlyRef = useRef(readOnly);
   askRef.current = ask;
+  readOnlyRef.current = readOnly;
   onSizeChangedRef.current = onSizeChanged;
   onLoadedRef.current = onLoaded;
   onTeardownRef.current = onTeardown;
@@ -73,16 +78,17 @@ export function useAppBridge(
 
       const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
       const { locale, timeZone } = Intl.DateTimeFormat().resolvedOptions();
+      // Display-only views advertise no host-bound action capabilities so a well-behaved app
+      // disables those affordances rather than issuing calls the host ignores.
+      const interactive = !readOnlyRef.current;
 
       bridge = new AppBridge(
         null,
         { name: 'LibreChat', version: '1.0.0' },
         {
           openLinks: {},
-          serverTools: {},
-          serverResources: {},
           logging: {},
-          message: { text: {} },
+          ...(interactive ? { serverTools: {}, serverResources: {}, message: { text: {} } } : {}),
         },
         {
           hostContext: {
@@ -95,13 +101,6 @@ export function useAppBridge(
           },
         },
       );
-
-      bridge.oncalltool = async (params) =>
-        callMCPAppTool(
-          resource.serverName as string,
-          params.name,
-          (params.arguments as Record<string, unknown>) ?? {},
-        ) as never;
 
       bridge.onopenlink = async ({ url }) => {
         try {
@@ -117,31 +116,50 @@ export function useAppBridge(
         return {};
       };
 
-      bridge.onreadresource = async (params) =>
-        readMCPResource(resource.serverName as string, params.uri) as never;
+      // Host-bound actions (tool calls, resource reads/lists, model messages) run with the viewer's
+      // auth, so they are only wired in interactive views, never in shared transcripts or /search.
+      if (interactive) {
+        bridge.oncalltool = async (params) =>
+          callMCPAppTool(
+            resource.serverName as string,
+            params.name,
+            (params.arguments as Record<string, unknown>) ?? {},
+          ) as never;
 
-      bridge.onlistresources = async (params) =>
-        listMCPResources(resource.serverName as string, params?.cursor) as never;
+        bridge.onreadresource = async (params) =>
+          readMCPResource(resource.serverName as string, params.uri) as never;
 
-      bridge.onlistresourcetemplates = async (params) =>
-        listMCPResourceTemplates(resource.serverName as string, params?.cursor) as never;
+        bridge.onlistresources = async (params) =>
+          listMCPResources(resource.serverName as string, params?.cursor) as never;
 
-      bridge.onmessage = async ({ content }) => {
-        const text = (content as MessageContentBlock[])
-          .filter((block) => block.type === 'text' && typeof block.text === 'string')
-          .map((block) => block.text)
-          .join('\n');
-        if (text) {
-          askRef.current({ text });
-        }
-        return {};
-      };
+        bridge.onlistresourcetemplates = async (params) =>
+          listMCPResourceTemplates(resource.serverName as string, params?.cursor) as never;
+
+        bridge.onmessage = async ({ content }) => {
+          const text = (content as MessageContentBlock[])
+            .filter((block) => block.type === 'text' && typeof block.text === 'string')
+            .map((block) => block.text)
+            .join('\n');
+          if (text) {
+            askRef.current({ text });
+          }
+          return {};
+        };
+      }
 
       bridge.addEventListener('sandboxready', async () => {
         if (sandboxReadyHandled) {
           return;
         }
         sandboxReadyHandled = true;
+        // Read-only views must not resolve app HTML from the viewer's MCP server, so only inline
+        // (persisted) HTML renders here.
+        if (!resource.text && readOnlyRef.current) {
+          logger.debug(
+            '[MCP App] Read-only view: skipping server HTML fetch for resourceUri-only app',
+          );
+          return;
+        }
         try {
           // Inline mcp-app resources already carry their HTML, so use it directly instead of a
           // resources/read round trip; resourceUri-only apps are fetched from the server.
