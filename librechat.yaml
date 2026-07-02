@@ -19,7 +19,7 @@ interface:
   fileCitations: false
   buildInfo: false
   skills: false
-  showProcessingSteps: true
+  showProcessingSteps: false
   sharedLinks: false
   shipsFromSelector: true
   defaultPinnedTools:
