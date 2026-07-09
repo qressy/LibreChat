@@ -33,9 +33,9 @@ import {
 } from './utils';
 import { mcpOptionsContainGraphTokenPlaceholder, preProcessGraphTokens } from '~/utils/graph';
 import { formatToolContent, resultHasRenderableUiResource } from './parsers';
-import { getToolUiResourceUri, isToolVisibilityModelOnly } from './apps';
 import { MCPServersInitializer } from './registry/MCPServersInitializer';
 import { OboTokenResolutionError, resolveOboToken } from '~/mcp/oauth';
+import { getToolUiResourceUri, isToolHiddenFromApp } from './apps';
 import { MCPServerInspector } from './registry/MCPServerInspector';
 import { MCPServersRegistry } from './registry/MCPServersRegistry';
 import { UserConnectionManager } from './UserConnectionManager';
@@ -71,7 +71,7 @@ export class MCPManager extends UserConnectionManager {
     Map<string, { uri: string; csp?: UIResource['csp']; permissions?: UIResource['permissions'] }>
   >();
 
-  private readonly modelOnlyToolCache = new Map<string, Set<string>>();
+  private readonly appHiddenToolCache = new Map<string, Set<string>>();
   private readonly knownToolNamesCache = new Map<string, Set<string>>();
   /**
    * Stamp of the connection each cache entry was built from, to detect reconnects (createdAt) and
@@ -217,7 +217,6 @@ export class MCPManager extends UserConnectionManager {
       useSSRFProtection,
       allowedDomains,
       allowedAddresses,
-      enableApps: registry.getAppsEnabled(),
     };
 
     const finalizeDiscoveryResult = async (
@@ -373,7 +372,7 @@ Please follow these instructions when using tools from the respective MCP server
     if (serverName && userId != null) {
       const cacheKey = `${serverName}:${userId}`;
       this.resourceUriCache.delete(cacheKey);
-      this.modelOnlyToolCache.delete(cacheKey);
+      this.appHiddenToolCache.delete(cacheKey);
       this.knownToolNamesCache.delete(cacheKey);
       this.toolCacheConnStamp.delete(cacheKey);
       this.advertisedResourceCache.delete(cacheKey);
@@ -384,7 +383,7 @@ Please follow these instructions when using tools from the respective MCP server
       for (const key of this.resourceUriCache.keys()) {
         if (key === serverName || key.startsWith(`${serverName}:`)) {
           this.resourceUriCache.delete(key);
-          this.modelOnlyToolCache.delete(key);
+          this.appHiddenToolCache.delete(key);
           this.knownToolNamesCache.delete(key);
           this.toolCacheConnStamp.delete(key);
           this.advertisedResourceCache.delete(key);
@@ -393,7 +392,7 @@ Please follow these instructions when using tools from the respective MCP server
       }
     } else {
       this.resourceUriCache.clear();
-      this.modelOnlyToolCache.clear();
+      this.appHiddenToolCache.clear();
       this.knownToolNamesCache.clear();
       this.toolCacheConnStamp.clear();
       this.advertisedResourceCache.clear();
@@ -434,7 +433,7 @@ Please follow these instructions when using tools from the respective MCP server
       string,
       { uri: string; csp?: UIResource['csp']; permissions?: UIResource['permissions'] }
     >;
-    modelOnly: Set<string>;
+    appHidden: Set<string>;
     knownNames: Set<string>;
   }> {
     const tools = await connection.fetchTools();
@@ -442,12 +441,12 @@ Please follow these instructions when using tools from the respective MCP server
       string,
       { uri: string; csp?: UIResource['csp']; permissions?: UIResource['permissions'] }
     >();
-    const modelOnly = new Set<string>();
+    const appHidden = new Set<string>();
     const knownNames = new Set<string>();
     for (const tool of tools) {
       knownNames.add(tool.name);
-      if (isToolVisibilityModelOnly(tool)) {
-        modelOnly.add(tool.name);
+      if (isToolHiddenFromApp(tool)) {
+        appHidden.add(tool.name);
       }
       // A malformed `_meta.ui.resourceUri` on one tool only disables that tool's UI metadata,
       // never aborting discovery for the whole server.
@@ -463,11 +462,11 @@ Please follow these instructions when using tools from the respective MCP server
         logger.warn(`[MCP] Ignoring invalid UI resource metadata on tool "${tool.name}":`, error);
       }
     }
-    return { serverMap, modelOnly, knownNames };
+    return { serverMap, appHidden, knownNames };
   }
 
   private async populateToolCaches(connection: MCPConnection, cacheKey: string): Promise<void> {
-    const { serverMap, modelOnly, knownNames } = await this.buildToolCaches(connection);
+    const { serverMap, appHidden, knownNames } = await this.buildToolCaches(connection);
     // fetchTools returns [] both for genuinely tool-less servers and for a transient tools/list
     // failure. Caching an empty list as authoritative would disable MCP Apps until reconnect, so
     // leave the cache unpopulated when empty and re-fetch on the next call.
@@ -475,7 +474,7 @@ Please follow these instructions when using tools from the respective MCP server
       return;
     }
     this.resourceUriCache.set(cacheKey, serverMap);
-    this.modelOnlyToolCache.set(cacheKey, modelOnly);
+    this.appHiddenToolCache.set(cacheKey, appHidden);
     this.knownToolNamesCache.set(cacheKey, knownNames);
     this.toolCacheConnStamp.set(cacheKey, this.connStamp(connection));
   }
@@ -677,7 +676,6 @@ Please follow these instructions when using tools from the respective MCP server
             useSSRFProtection,
             allowedDomains,
             allowedAddresses,
-            enableApps: registry.getAppsEnabled(),
           },
           {
             useOAuth: true,
@@ -991,19 +989,25 @@ Please follow these instructions when using tools from the respective MCP server
 
     const uris = new Set<string>();
     let cursor: string | undefined;
-    for (let page = 0; page < MCPManager.RESOURCE_LIST_MAX_PAGES; page++) {
-      const result: ListResourcesResult = await connection.client.request(
-        { method: 'resources/list', params: cursor != null ? { cursor } : {} },
-        ListResourcesResultSchema,
-        { timeout: connection.timeout },
-      );
-      for (const resource of result.resources) {
-        uris.add(resource.uri);
+    // A template-only server may not implement resources/list; treat its failure as an empty
+    // concrete list so advertised templates below are still collected and can authorize reads.
+    try {
+      for (let page = 0; page < MCPManager.RESOURCE_LIST_MAX_PAGES; page++) {
+        const result: ListResourcesResult = await connection.client.request(
+          { method: 'resources/list', params: cursor != null ? { cursor } : {} },
+          ListResourcesResultSchema,
+          { timeout: connection.timeout },
+        );
+        for (const resource of result.resources) {
+          uris.add(resource.uri);
+        }
+        if (result.nextCursor == null) {
+          break;
+        }
+        cursor = result.nextCursor;
       }
-      if (result.nextCursor == null) {
-        break;
-      }
-      cursor = result.nextCursor;
+    } catch (error) {
+      logger.debug(`[MCP][${cacheKey}] resources/list unavailable; using templates only.`, error);
     }
 
     const templates: RegExp[] = [];
@@ -1308,10 +1312,10 @@ Please follow these instructions when using tools from the respective MCP server
       );
     }
 
-    if (this.modelOnlyToolCache.get(cacheKey)?.has(toolName)) {
+    if (this.appHiddenToolCache.get(cacheKey)?.has(toolName)) {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        `${logPrefix} Tool "${toolName}" is restricted to model use only.`,
+        `${logPrefix} Tool "${toolName}" is not available to apps (visibility excludes "app").`,
       );
     }
 

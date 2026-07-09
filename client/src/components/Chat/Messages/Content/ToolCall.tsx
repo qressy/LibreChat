@@ -90,7 +90,7 @@ const MCPAppView = React.memo(function MCPAppView({
       <div className="my-2">
         <iframe
           srcDoc={app.text}
-          sandbox="allow-scripts allow-forms"
+          sandbox=""
           style={{ width: '100%', minHeight: '200px', border: 'none' }}
           title={app.uri}
         />
@@ -404,7 +404,7 @@ export default function ToolCall({
       {!hideAttachments && attachments && attachments.length > 0 && (
         <AttachmentGroup attachments={attachments} />
       )}
-      {hasOutput &&
+      {mcpApps.length > 0 &&
         mcpApps.map((app) => <MCPAppView key={app.resourceId} app={app} args={_args} />)}
     </>
   );
