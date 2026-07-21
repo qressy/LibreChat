@@ -14,6 +14,7 @@ import { cn, getToolDisplayLabel } from '~/utils';
 import { StackedToolIcons } from './ToolOutput';
 import { useMCPIconMap } from '~/hooks/MCP';
 import { AttachmentGroup } from './Parts';
+import { useGetStartupConfig } from '~/data-provider';
 import store from '~/store';
 import { isBashProgrammaticToolCall } from './routing';
 
@@ -104,6 +105,8 @@ export default function ToolCallGroup({
 }: ToolCallGroupProps) {
   const localize = useLocalize();
   const mcpIconMap = useMCPIconMap();
+  const { data: startupConfig } = useGetStartupConfig();
+  const showProcessingSteps = startupConfig?.interface?.showProcessingSteps !== false;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const cancelLayoutReconcileRef = useRef<(() => void) | null>(null);
   const count = parts.length;
@@ -236,6 +239,10 @@ export default function ToolCallGroup({
       setIsExpanded(true);
     }
   }, [hasActiveToolCall, userOverride]);
+
+  if (!showProcessingSteps) {
+    return null;
+  }
 
   return (
     <div className="mb-2 mt-1" ref={rootRef}>
