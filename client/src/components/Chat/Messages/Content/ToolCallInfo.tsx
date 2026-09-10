@@ -1,8 +1,13 @@
 import { useState, useMemo } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { Tools } from 'librechat-data-provider';
+import type { TAttachment, UIResource } from 'librechat-data-provider';
+import UIResourceRenderer, { isSupportedUIResource } from '~/components/MCPUIResource/Renderer';
+import { useOptionalMessagesOperations } from '~/Providers';
 import { useLocalize, useExpandCollapse } from '~/hooks';
+import UIResourceCarousel from './UIResourceCarousel';
 import { OutputRenderer } from './ToolOutput';
-import { cn } from '~/utils';
+import { handleUIAction, cn } from '~/utils';
 
 function isSimpleObject(obj: unknown): obj is Record<string, string | number | boolean | null> {
   if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
@@ -87,8 +92,17 @@ function InputRenderer({ input }: { input: string }) {
   }
 }
 
-export default function ToolCallInfo({ input, output }: { input: string; output?: string | null }) {
+export default function ToolCallInfo({
+  input,
+  output,
+  attachments,
+}: {
+  input: string;
+  output?: string | null;
+  attachments?: TAttachment[];
+}) {
   const localize = useLocalize();
+  const { ask } = useOptionalMessagesOperations();
   const [showParams, setShowParams] = useState(false);
   const { style: paramsExpandStyle, ref: paramsExpandRef } = useExpandCollapse(showParams);
 
@@ -106,6 +120,14 @@ export default function ToolCallInfo({ input, output }: { input: string; output?
     }
     return input.trim().length > 0;
   }, [input]);
+
+  const uiResources: UIResource[] =
+    attachments
+      ?.filter((attachment) => attachment.type === Tools.ui_resources)
+      .flatMap((attachment) => {
+        return attachment[Tools.ui_resources] as UIResource[];
+      })
+      .filter(isSupportedUIResource) ?? [];
 
   return (
     <div className="w-full px-3 py-3.5">
@@ -136,6 +158,21 @@ export default function ToolCallInfo({ input, output }: { input: string; output?
               <InputRenderer input={input} />
             </div>
           </div>
+        </>
+      )}
+      {uiResources.length > 0 && (
+        <>
+          {(hasParams || output) && <div className="my-2 border-t border-border-light" />}
+          {uiResources.length > 1 && <UIResourceCarousel uiResources={uiResources} />}
+          {uiResources.length === 1 && (
+            <UIResourceRenderer
+              resource={uiResources[0]}
+              onUIAction={async (result) => handleUIAction(result, ask)}
+              htmlProps={{
+                autoResizeIframe: { width: true, height: true },
+              }}
+            />
+          )}
         </>
       )}
     </div>

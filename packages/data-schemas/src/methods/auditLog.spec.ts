@@ -351,6 +351,30 @@ describe('auditLog methods', () => {
       expect(result.checked).toBe(0);
     });
 
+    it('stops verification when the caller cancels', async () => {
+      await seed(3);
+      const result = await methods.verifyAuditChain('tenant-a', { isCancelled: () => true });
+      expect(result.ok).toBe(false);
+      expect(result.checked).toBe(0);
+      expect(result.reason).toBe('verification cancelled');
+    });
+
+    it('bounds verification when rows exceed the configured cap', async () => {
+      await seed(3);
+      const result = await methods.verifyAuditChain('tenant-a', { maxRows: 2 });
+      expect(result.ok).toBe(false);
+      expect(result.checked).toBe(2);
+      expect(result.brokenAt).toBe(3);
+      expect(result.reason).toMatch(/row limit exceeded/);
+    });
+
+    it('allows an exact-cap verification to complete', async () => {
+      await seed(2);
+      const result = await methods.verifyAuditChain('tenant-a', { maxRows: 2 });
+      expect(result.ok).toBe(true);
+      expect(result.checked).toBe(2);
+    });
+
     it('detects a tampered field (hash mismatch)', async () => {
       await seed(3);
       // mutate a field via the raw driver, bypassing the append-only hooks
@@ -482,6 +506,32 @@ describe('auditLog methods', () => {
   });
 
   describe('append index safety', () => {
+    it('fails open within the index-build deadline while a peer holds the collection', async () => {
+      const prototype = mongoose.mongo.Collection.prototype;
+      const createIndex = prototype.createIndex;
+      const collectionName = AuditLog.collection.name;
+      prototype.createIndex = async function (this: mongoose.mongo.Collection, spec, options) {
+        if (this.collectionName !== collectionName) {
+          return createIndex.call(this, spec, options);
+        }
+        throw new mongoose.mongo.MongoServerError({
+          ok: 0,
+          code: 40333,
+          errmsg:
+            'Existing index build in progress on the same collection. Collection is limited to a single index build at a time.',
+        });
+      };
+      try {
+        const freshMethods = createAuditLogMethods(mongoose, {
+          indexBuild: { peerBuildPollMs: 1, peerBuildDeadlineMs: 20 },
+        });
+
+        await expect(freshMethods.recordAuditEntry(baseInput())).resolves.toBeNull();
+      } finally {
+        prototype.createIndex = createIndex;
+      }
+    });
+
     it('builds the unique seq index before appending (independent of autoIndex)', async () => {
       const spy = jest.spyOn(AuditLog, 'createIndexes');
       // a fresh methods instance has not yet memoized the index build

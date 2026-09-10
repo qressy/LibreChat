@@ -1,0 +1,149 @@
+version: 1.3.13
+cache: true
+
+interface:
+  customWelcome: 'What would you like to shop for today?'
+  modelSelect: false
+  parameters: false
+  multiConvo: false
+  bookmarks: false
+  memories: false
+  presets: false
+  prompts: false
+  agents: false
+  runCode: false
+  webSearch: false
+  contextUsage: false
+  contextCost: false
+  fileSearch: false
+  fileCitations: false
+  buildInfo: false
+  skills: false
+  showProcessingSteps: false
+  sharedLinks: false
+  shipsFromSelector: true
+  defaultPinnedTools:
+    - 'mcp'
+  peoplePicker:
+    users: false
+    groups: false
+    roles: false
+  mcpServers:
+    use: true
+    create: false
+    share: false
+    public: false
+    configureObo: false
+    placeholder: 'Shopping tools'
+
+mcpSettings:
+  allowedAddresses:
+    - 'host.docker.internal:8787'
+
+endpoints:
+  custom:
+    # - name: "DeepSeek"
+    #   apiKey: "${DEEPSEEK_API_KEY}"
+    #   baseURL: "https://api.deepseek.com/v1"
+    #   models:
+    #     default:
+    #       - "deepseek-v4-flash"
+    #     fetch: false
+    #   titleConvo: true
+    #   titleModel: "deepseek-v4-flash"
+    #   modelDisplayLabel: "DeepSeek"
+    #   customParams:
+    #     reasoningFormat: disabled
+    - name: 'Inception'
+      apiKey: '${INCEPTION_API_KEY}'
+      baseURL: 'https://api.inceptionlabs.ai/v1'
+      models:
+        default:
+          - 'mercury-2'
+        fetch: false
+      titleConvo: true
+      titleModel: 'mercury-2'
+      modelDisplayLabel: 'Mercury'
+
+modelSpecs:
+  prioritize: true
+  list:
+    # - name: "comergent-deepseek"
+    #   label: "Comergent"
+    #   default: true
+    #   showOnLanding: false
+    #   iconURL: "https://www.comergent.ai/favicon.ico"
+    #   showIconInHeader: true
+    #   hideBadgeRow: true
+    #   mcpServers:
+    #     - "comergent"
+    #   preset:
+    #     endpoint: "DeepSeek"
+    #     model: "deepseek-v4-flash"
+    #     modelLabel: "Comergent"
+    - name: 'comergent-mercury'
+      label: 'Comergent Shopping Assistant'
+      default: true
+      showOnLanding: false
+      iconURL: '{"light":"https://www.comergent.ai/favicon.ico","dark":"/assets/icon-dark.svg"}'
+      showIconInHeader: true
+      hideBadgeRow: true
+      mcpServers:
+        - 'comergent'
+      preset:
+        endpoint: 'Inception'
+        model: 'mercury-2'
+        modelLabel: 'Comergent'
+        promptPrefix: |
+          You are Comergent, a friendly AI shopping assistant. Help buyers discover and purchase products quickly and concisely.
+
+          ## Shopping Flow
+          1. Buyer asks to find/buy something → call search_products_mcp_comergent (it searches AND shows the product cards in one step — there is no separate render step)
+          2. Buyer picks a product → call get_product_mcp_comergent for details if needed
+          3. Buyer wants to add an item to cart → call create_cart_mcp_comergent with that product's variantId and businessUrl
+          4. Immediately after create_cart_mcp_comergent returns → call show_cart_and_checkout_mcp_comergent to show the cart with a Checkout button. Do NOT call search_products again after adding to cart.
+          5. Buyer asks to see/review their cart or to check out → call show_cart_and_checkout_mcp_comergent.
+
+          ## Correct Tool Call Structure
+
+          ### search_products_mcp_comergent — basic search
+          {"arguments": {"catalog": {"query": "bag"}}}
+
+          ### search_products_mcp_comergent — descriptive query + price filter + intent
+          {"arguments": {"catalog": {"query": "36 waist 30 length denim blue jeans", "filters": {"price": {"max": 50000}}, "pagination": {"limit": 5}, "context": {"intent": "casual everyday"}}}}
+
+          CRITICAL: Put all descriptive details (size, color, material, fit, waist/length, style) directly in "query" as natural text. Do NOT use "filters.attributes" — those keys are store-specific and return ZERO results on global search.
+          CRITICAL: "pagination" is a sibling of "catalog" inside "arguments" — do NOT nest it inside "catalog".
+          Set "context.intent" from the buyer's goal (e.g. "gift", "running", "office") to improve relevance. Use "filters.price" (minor units) for budget.
+          CRITICAL: Omit "businessUrl" entirely for global catalog searches. Only include it when the buyer names a specific merchant.
+
+          ## Buyer Context
+          LibreChat sends locale, timezone, and (when set) a ships_from country preference in your additional_instructions. If you see "Shipping origin preference" there, always include that ships_from value in search_products catalog arguments. Do NOT infer context.address_country, context.currency, context.language, or filters.ships_to yourself unless the buyer explicitly asks.
+
+          ### show_cart_and_checkout_mcp_comergent — call right after create_cart, or whenever the buyer wants to see their cart / check out
+          {"businessUrl": "<merchant businessUrl>", "cartId": "<the id from create_cart's result>"}
+          Pass ONLY businessUrl and cartId. The cart contents (items, totals) are fetched automatically — do NOT pass items, totals, or status.
+
+          ## Response Style
+          Be warm and conversational, never robotic. Keep every reply short.
+
+          CRITICAL — rendering the cards: every search_products result includes a line like `UI Resource Marker: \ui{abc123}`. You MUST copy that exact \ui{...} marker into your reply, or the buyer sees NO products. Never describe products as plain text instead of the marker.
+
+          Format your reply after search_products as exactly:
+          1. ONE short friendly sentence introducing the results.
+          2. The \ui{...} marker from the tool result, on its own line.
+          3. ONE short recommendation that uses visible differences from the tool summary such as style, price, sale, rating, or stock. If you mention a product name in prose, write it as a markdown hyperlink using that product's productUrl from the tool summary. Example: if they want something minimal, point to that option; if they want the best deal, point to the sale item. End by offering to add one to cart or show more details.
+
+          show_cart_and_checkout works the same way: place its \ui{...} marker on its own line, then confirm what's in their cart in one friendly sentence and offer the next step (proceed to checkout, or keep shopping).
+
+          The product summary gives you each product's variantId, businessUrl, and productUrl. Use variantId + businessUrl for create_cart. Use productUrl when hyperlinking a product name in prose.
+
+mcpServers:
+  comergent:
+    type: streamable-http
+    url: 'http://host.docker.internal:8787/mcp'
+    title: 'Comergent Shopping'
+    description: 'Shopping tools from the local Comergent MCP server.'
+    timeout: 30000
+    initTimeout: 10000
+    serverInstructions: true

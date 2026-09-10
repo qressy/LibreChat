@@ -9,16 +9,29 @@ import {
   renderCustomGroups,
 } from './components';
 import { ModelSelectorProvider, useModelSelectorContext } from './ModelSelectorContext';
+import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
 import { ModelSelectorChatProvider } from './ModelSelectorChatContext';
 import { getSelectedIcon, getDisplayValue } from './utils';
 import { CustomMenu as Menu } from './CustomMenu';
 import DialogManager from './DialogManager';
+import { BRAND_LOGOS } from '~/brand';
 import { useLocalize } from '~/hooks';
 
 const defaultInterface = getConfigDefaults().interface;
 
+function ModelSelectorBranding() {
+  return (
+    <div className="mb-1 mt-6 flex h-16 items-center px-3 py-1">
+      <img src={BRAND_LOGOS.light} className="h-full object-contain dark:hidden" alt="" />
+      <img src={BRAND_LOGOS.dark} className="hidden h-full object-contain dark:block" alt="" />
+    </div>
+  );
+}
+
 function ModelSelectorContent() {
   const localize = useLocalize();
+  const modelSelectorHint = useShortcutHint('openModelSelector', localize('com_ui_select_model'));
+  const modelSelectorAriaKey = useShortcutAriaKey('openModelSelector');
 
   const {
     // LibreChat
@@ -46,8 +59,9 @@ function ModelSelectorContent() {
         selectedValues,
         modelSpecs,
         endpointsConfig,
+        agentsMap,
       }),
-    [mappedEndpoints, selectedValues, modelSpecs, endpointsConfig],
+    [mappedEndpoints, selectedValues, modelSpecs, endpointsConfig, agentsMap],
   );
   const selectedDisplayValue = useMemo(
     () =>
@@ -64,10 +78,12 @@ function ModelSelectorContent() {
   const trigger = (
     <TooltipAnchor
       aria-label={localize('com_ui_select_model')}
-      description={localize('com_ui_select_model')}
+      description={modelSelectorHint}
       render={
         <button
-          className="my-1 flex h-9 w-full max-w-[70vw] items-center justify-center gap-2 rounded-xl border border-border-light bg-presentation px-3 py-2 text-sm text-text-primary hover:bg-surface-active-alt"
+          data-testid="model-selector-button"
+          aria-keyshortcuts={modelSelectorAriaKey}
+          className="my-1 flex h-9 max-w-full items-center gap-2 rounded-xl border border-border-light bg-presentation px-3 py-2 text-sm text-text-primary hover:bg-surface-active-alt"
           aria-label={localize('com_ui_select_model')}
         >
           {selectedIcon && React.isValidElement(selectedIcon) && (
@@ -75,14 +91,14 @@ function ModelSelectorContent() {
               {selectedIcon}
             </div>
           )}
-          <span className="flex-grow truncate text-left">{selectedDisplayValue}</span>
+          <span className="truncate text-left">{selectedDisplayValue}</span>
         </button>
       }
     />
   );
 
   return (
-    <div className="relative flex w-full max-w-md flex-col items-center gap-2">
+    <div className="relative flex min-w-0 max-w-[60vw] flex-col items-center gap-2 sm:max-w-xs">
       <Menu
         values={selectedValues}
         onValuesChange={(values: Record<string, any>) => {
@@ -127,15 +143,16 @@ export default function ModelSelector({ startupConfig }: ModelSelectorProps) {
   const interfaceConfig = startupConfig?.interface ?? defaultInterface;
   const modelSpecs = startupConfig?.modelSpecs?.list ?? [];
 
-  // Hide the selector when modelSelect is false and there are no model specs to show
   if (interfaceConfig.modelSelect === false && modelSpecs.length === 0) {
     return null;
   }
 
+  const Content = interfaceConfig.modelSelect === false ? ModelSelectorBranding : ModelSelectorContent;
+
   return (
     <ModelSelectorChatProvider>
       <ModelSelectorProvider startupConfig={startupConfig}>
-        <ModelSelectorContent />
+        <Content />
       </ModelSelectorProvider>
     </ModelSelectorChatProvider>
   );

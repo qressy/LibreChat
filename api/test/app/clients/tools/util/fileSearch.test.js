@@ -1,9 +1,15 @@
 const axios = require('axios');
+const { ResourceType } = require('librechat-data-provider');
 
 jest.mock('axios');
-jest.mock('@librechat/api', () => ({
-  generateShortLivedToken: jest.fn(),
-}));
+jest.mock('@librechat/api', () => {
+  const { selectFileCitationSources } = jest.requireActual('@librechat/api');
+  return {
+    generateShortLivedToken: jest.fn(),
+    logAxiosError: jest.fn(),
+    selectFileCitationSources,
+  };
+});
 
 jest.mock('@librechat/data-schemas', () => ({
   logger: {
@@ -21,8 +27,32 @@ jest.mock('~/server/services/Files/permissions', () => ({
   filterFilesByAgentAccess: jest.fn((options) => Promise.resolve(options.files)),
 }));
 
-const { createFileSearchTool } = require('~/app/clients/tools/util/fileSearch');
+const { createFileSearchTool, primeFiles } = require('~/app/clients/tools/util/fileSearch');
 const { generateShortLivedToken } = require('@librechat/api');
+
+describe('fileSearch.js - agent file authorization', () => {
+  it('uses the permission resource type established by the calling route', async () => {
+    const { getFiles } = require('~/models');
+    const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
+    const files = [{ file_id: 'owner-file', filename: 'owner.pdf', user: 'agent-owner' }];
+    getFiles.mockResolvedValueOnce(files);
+
+    await primeFiles({
+      req: { user: { id: 'remote-viewer', role: 'USER' } },
+      agentId: 'agent-123',
+      agentResourceType: ResourceType.REMOTE_AGENT,
+      tool_resources: { file_search: { file_ids: ['owner-file'] } },
+    });
+
+    expect(filterFilesByAgentAccess).toHaveBeenCalledWith({
+      files,
+      userId: 'remote-viewer',
+      role: 'USER',
+      agentId: 'agent-123',
+      resourceType: ResourceType.REMOTE_AGENT,
+    });
+  });
+});
 
 describe('fileSearch.js - tuple return validation', () => {
   beforeEach(() => {
@@ -80,6 +110,34 @@ describe('fileSearch.js - tuple return validation', () => {
   });
 
   describe('success cases should return tuple with artifact object', () => {
+    it.each([
+      [0, [1]],
+      [2, [3]],
+      [undefined, []],
+      [null, []],
+      [-1, []],
+      [1.5, []],
+      ['2', []],
+    ])('maps RAG page index %s to citation pages %j', async (page, pages) => {
+      generateShortLivedToken.mockReturnValue('mock-jwt-token');
+      axios.post.mockResolvedValue({
+        data: [
+          [{ page_content: 'Synthetic passage', metadata: { source: '/test.pdf', page } }, 0.2],
+        ],
+      });
+
+      const fileSearchTool = await createFileSearchTool({
+        userId: 'user1',
+        files: [{ file_id: 'file-123', filename: 'test.pdf' }],
+        fileCitations: true,
+      });
+      const [, artifact] = await fileSearchTool.func({ query: 'Synthetic page check' });
+      const source = artifact.file_search.sources[0];
+
+      expect(source.pages).toEqual(pages);
+      expect(source.pageRelevance).toEqual(pages.length ? { [pages[0]]: expect.any(Number) } : {});
+    });
+
     it('should return tuple with formatted results and sources artifact', async () => {
       generateShortLivedToken.mockReturnValue('mock-jwt-token');
 
@@ -88,14 +146,14 @@ describe('fileSearch.js - tuple return validation', () => {
           [
             {
               page_content: 'This is test content from the document',
-              metadata: { source: '/path/to/test.pdf', page: 1 },
+              metadata: { source: '/path/to/test.pdf', page: 0 },
             },
             0.2,
           ],
           [
             {
               page_content: 'Additional relevant content',
-              metadata: { source: '/path/to/test.pdf', page: 2 },
+              metadata: { source: '/path/to/test.pdf', page: 1 },
             },
             0.35,
           ],

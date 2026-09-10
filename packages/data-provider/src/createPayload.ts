@@ -11,6 +11,27 @@ function getUserTimezone(): string | undefined {
   }
 }
 
+/** Resolves the browser's BCP-47 locale (e.g. `en-IN`) for region-aware tools (MCP). */
+function getUserLocale(): string | undefined {
+  try {
+    return (typeof navigator !== 'undefined' && navigator.language) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reads the ships_from country code. 'global' sentinel means no filter; absent means derive from locale. */
+function getShipsFrom(): string | undefined {
+  try {
+    if (typeof localStorage === 'undefined') return undefined;
+    const stored = localStorage.getItem('comergent_ships_from');
+    if (stored === 'global' || stored === null) return undefined;
+    return stored || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function createPayload(submission: t.TSubmission) {
   const {
     isEdited,
@@ -19,11 +40,17 @@ export default function createPayload(submission: t.TSubmission) {
     isContinued,
     isTemporary,
     isRegenerate,
+    compact,
     conversation,
     editedContent,
     ephemeralAgent,
     endpointOption,
     manualSkills,
+    codeApprovalMode,
+    codeWorkspaces,
+    clientRequestId,
+    recoverySteerId,
+    expectedPredecessorCreatedAt,
   } = submission;
   const { conversationId } = s.tConvoUpdateSchema.parse(conversation);
   const { endpoint: _e, endpointType } = endpointOption as {
@@ -32,7 +59,9 @@ export default function createPayload(submission: t.TSubmission) {
   };
 
   const endpoint = _e as s.EModelEndpoint;
-  let server = `${EndpointURLs[s.EModelEndpoint.agents]}/${endpoint}`;
+  /** Custom endpoint names are user-defined and may contain `/`, which would
+   * otherwise split into extra path segments and miss the `/:endpoint` route. */
+  let server = `${EndpointURLs[s.EModelEndpoint.agents]}/${encodeURIComponent(endpoint)}`;
   if (s.isAssistantsEndpoint(endpoint)) {
     server =
       EndpointURLs[(endpointType ?? endpoint) as 'assistants' | 'azureAssistants'] +
@@ -45,13 +74,23 @@ export default function createPayload(submission: t.TSubmission) {
     endpoint,
     addedConvo,
     isTemporary,
-    isRegenerate,
+    /** A compaction borrows the regenerate shape client-side only: the server
+     *  must see it as a compaction, never as a regenerated user turn. */
+    isRegenerate: compact === true ? undefined : isRegenerate,
+    ...(compact === true && { compact: true }),
     editedContent,
     conversationId,
     isContinued: !!(isEdited && isContinued),
     ephemeralAgent: s.isAssistantsEndpoint(endpoint) ? undefined : ephemeralAgent,
     manualSkills: s.isAssistantsEndpoint(endpoint) ? undefined : manualSkills,
+    codeApprovalMode: s.isAssistantsEndpoint(endpoint) ? undefined : codeApprovalMode,
+    codeWorkspaces: s.isAssistantsEndpoint(endpoint) ? undefined : codeWorkspaces,
     timezone: getUserTimezone(),
+    locale: getUserLocale(),
+    shipsFrom: getShipsFrom(),
+    clientRequestId,
+    recoverySteerId,
+    expectedPredecessorCreatedAt,
   };
 
   return { server, payload };

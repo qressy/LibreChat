@@ -4,8 +4,10 @@ const {
   isEnabled,
   sendEvent,
   countTokens,
+  isAbortError,
   GenerationJobManager,
   recordCollectedUsage,
+  getTransactionsConfig,
   sanitizeMessageForTransmit,
   buildAbortedResponseMetadata,
 } = require('@librechat/api');
@@ -29,6 +31,7 @@ const db = require('~/models');
  * @param {Array<Object>} params.collectedUsage - Usage metadata from all models
  * @param {string} [params.fallbackModel] - Fallback model name if not in usage
  * @param {string} [params.messageId] - The response message ID for transaction correlation
+ * @param {AppConfig['transactions']} [params.transactions] - Resolved transactions config
  */
 async function spendCollectedUsage({
   userId,
@@ -36,6 +39,7 @@ async function spendCollectedUsage({
   collectedUsage,
   fallbackModel,
   messageId,
+  transactions,
 }) {
   if (!collectedUsage || collectedUsage.length === 0) {
     return;
@@ -55,6 +59,7 @@ async function spendCollectedUsage({
       context: 'abort',
       messageId,
       model: fallbackModel,
+      transactions,
     },
   );
 
@@ -109,6 +114,11 @@ async function abortMessage(req, res) {
     error: false,
     isCreatedByUser: false,
     tokenCount: completionTokens,
+    /** The run publishes its calibration and fading tiers onto the job as it
+     * goes; a stopped response must carry them or the next turn re-derives its
+     * provider projection of history from scratch and loses the cached prefix.
+     * A job with none unsets what an earlier pause stored on this row. */
+    ...(jobData != null && { contextMeta: jobData.contextMeta ?? null }),
   };
 
   /** Persist the usage/cost rollup + context breakdown for the stopped response
@@ -119,6 +129,8 @@ async function abortMessage(req, res) {
     responseMessage.metadata = abortMetadata;
   }
 
+  const transactions = getTransactionsConfig(req.config);
+
   // Spend tokens for ALL models from collectedUsage (handles parallel agents/addedConvo)
   if (collectedUsage && collectedUsage.length > 0) {
     await spendCollectedUsage({
@@ -127,11 +139,12 @@ async function abortMessage(req, res) {
       collectedUsage,
       fallbackModel: jobData?.model,
       messageId: jobData?.responseMessageId,
+      transactions,
     });
   } else {
     // Fallback: no collected usage, use text-based token counting for primary model only
     await db.spendTokens(
-      { ...responseMessage, context: 'incomplete', user: userId },
+      { ...responseMessage, context: 'incomplete', user: userId, transactions },
       { promptTokens, completionTokens },
     );
   }
@@ -139,7 +152,8 @@ async function abortMessage(req, res) {
   await db.saveMessage(
     {
       userId: req?.user?.id,
-      isTemporary: req?.body?.isTemporary,
+      isTemporary: req?.resolvedConversation?.isTemporary ?? req?.body?.isTemporary,
+      expiredAt: req?.resolvedConversation?.expiredAt,
       interfaceConfig: req?.config?.interfaceConfig,
     },
     { ...responseMessage, user: userId },
@@ -200,18 +214,26 @@ const handleAbort = function () {
  * @returns {Promise<void>}
  */
 const handleAbortError = async (res, req, error, data) => {
+  const { sender, conversationId, messageId, parentMessageId, userMessageId, partialText } = data;
+
   if (error?.message?.includes('base64')) {
     logger.error('[handleAbortError] Error in base64 encoding', {
       ...error,
       stack: smartTruncateText(error?.stack, 1000),
       message: truncateText(error.message, 350),
     });
+  } else if (isAbortError(error)) {
+    logger.debug('[handleAbortError] AI response aborted by user', {
+      conversationId,
+      code: error?.code,
+      name: error?.name,
+      message: truncateText(error?.message ?? 'AbortError', 350),
+    });
   } else {
     logger.error('[handleAbortError] AI response error; aborting request:', error);
   }
-  const { sender, conversationId, messageId, parentMessageId, userMessageId, partialText } = data;
 
-  if (error.stack && error.stack.includes('google')) {
+  if (error?.stack && error.stack.includes('google')) {
     logger.warn(
       `AI Response error for conversation ${conversationId} likely caused by Google censor/filter`,
     );

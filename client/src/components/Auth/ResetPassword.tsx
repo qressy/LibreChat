@@ -21,9 +21,9 @@ function ResetPassword() {
   const resetPassword = useResetPasswordMutation();
   const { setError, setHeaderText, startupConfig } = useOutletContext<TLoginLayoutContext>();
   const authInputClassName =
-    'webkit-dark-styles transition-color peer h-auto w-full rounded-2xl border border-border-light bg-surface-primary px-3.5 pb-2.5 pr-12 pt-3 text-text-primary duration-200 hover:border-border-light focus:border-green-500 focus:outline-none focus-visible:border-green-500';
+    'webkit-dark-styles transition-color peer h-auto w-full rounded-2xl border border-border-light bg-surface-primary px-3.5 pb-2.5 pr-12 pt-3 text-text-primary duration-200 hover:border-border-light focus:border-brand-purple focus:outline-none focus-visible:border-brand-purple';
   const authLabelClassName =
-    'absolute start-3 top-1.5 z-10 origin-[0] -translate-y-4 scale-75 transform bg-surface-primary px-2 text-sm text-text-secondary-alt duration-200 peer-placeholder-shown:top-1/2 peer-placeholder-shown:-translate-y-1/2 peer-placeholder-shown:scale-100 peer-focus:top-1.5 peer-focus:-translate-y-4 peer-focus:scale-75 peer-focus:px-2 peer-focus:text-green-500 rtl:peer-focus:left-auto rtl:peer-focus:translate-x-1/4';
+    'absolute start-3 top-1.5 z-10 origin-[0] -translate-y-4 scale-75 transform bg-surface-primary px-2 text-sm text-text-secondary-alt duration-200 peer-placeholder-shown:top-1/2 peer-placeholder-shown:-translate-y-1/2 peer-placeholder-shown:scale-100 peer-focus:top-1.5 peer-focus:-translate-y-4 peer-focus:scale-75 peer-focus:px-2 peer-focus:text-brand-purple rtl:peer-focus:left-auto rtl:peer-focus:translate-x-1/4';
   const authSecretButtonClassName =
     'size-9 rounded-xl text-text-secondary-alt hover:bg-transparent hover:text-text-primary';
 
@@ -42,7 +42,7 @@ function ResetPassword() {
     return (
       <>
         <div
-          className="relative mt-6 rounded-xl border border-green-500/20 bg-green-50/50 px-6 py-4 text-green-700 shadow-sm transition-all dark:bg-green-950/30 dark:text-green-100"
+          className="relative mt-6 rounded-xl border border-brand-purple-subtle-border bg-brand-purple-subtle px-6 py-4 text-brand-purple shadow-sm transition-all dark:text-orange-100"
           role="alert"
         >
           <div className="flex flex-col space-y-4">

@@ -39,7 +39,7 @@ function AuthLayout({
         <div className="mx-auto sm:max-w-sm">
           <ErrorMessage>
             {localize('com_auth_error_invalid_reset_token')}{' '}
-            <a className="font-semibold text-green-600 hover:underline" href="/forgot-password">
+            <a className="font-semibold text-brand-purple hover:underline" href="/forgot-password">
               {localize('com_auth_click_here')}
             </a>{' '}
             {localize('com_auth_to_try_again')}
@@ -60,11 +60,16 @@ function AuthLayout({
     <div className="relative flex min-h-screen flex-col bg-white dark:bg-gray-900">
       <Banner />
       <BlinkAnimation active={isFetching}>
-        <div className="mt-6 h-10 w-full bg-cover">
+        <div className="mt-6 h-20 w-full bg-cover">
           <img
-            src="assets/logo.svg"
-            className="h-full w-full object-contain"
-            alt={localize('com_ui_logo', { 0: startupConfig?.appTitle ?? 'LibreChat' })}
+            src="/assets/logo-light.svg"
+            className="h-full w-full object-contain dark:hidden"
+            alt={localize('com_ui_logo', { 0: startupConfig?.appTitle ?? 'Comergent AI' })}
+          />
+          <img
+            src="/assets/logo-dark.svg"
+            className="hidden h-full w-full object-contain dark:block"
+            alt={localize('com_ui_logo', { 0: startupConfig?.appTitle ?? 'Comergent AI' })}
           />
         </div>
       </BlinkAnimation>
