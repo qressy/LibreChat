@@ -1,10 +1,13 @@
 import { Fragment, useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react';
 import { useRecoilState } from 'recoil';
 import * as Ariakit from '@ariakit/react';
-import { Zap, ZapOff, Clock, ArrowUp, CircleHelp, MoreHorizontal } from 'lucide-react';
+import { Zap, ZapOff, Clock } from 'lucide';
+import { MorphIcon } from '@librechat/client';
+import { ArrowUp, CircleHelp, MoreHorizontal } from 'lucide-react';
 import type { Ref } from 'react';
 import type { SteeringControls } from '~/hooks/Chat/useSteering';
 import { useShortcutAriaKey, useShortcutDisplay } from '~/hooks/useKeyboardShortcuts';
+import { QUEUE_ICON, STEER_ICON } from '~/components/Chat/Steering/identity';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 import store from '~/store';
@@ -234,46 +237,37 @@ export function EscalateNowButton({
   }, [disabled, targetId]);
 
   return (
-    <>
-      {/* Thin divider binds the arrow to the message on its left, so it can
-       *  never read as part of the bare-glyph menu control beside it — the
-       *  send-now belongs to THIS chip, and the pairing repeats cleanly when
-       *  several messages stack. */}
-      <span aria-hidden="true" className="h-[18px] w-px shrink-0 bg-border-medium" />
-      <Ariakit.TooltipProvider placement="top" timeout={300}>
-        <Ariakit.TooltipAnchor
-          render={
-            <button
-              type="button"
-              aria-label={accessibleLabel}
-              aria-keyshortcuts={isActive ? ariaKey : undefined}
-              data-escalate-steer={surface}
-              data-escalate-steer-active={isActive ? 'true' : undefined}
-              data-testid={surface === 'queued' ? 'queued-interrupt-now' : 'steer-escalate-now'}
-              disabled={disabled}
-              onPointerEnter={() =>
-                !disabled && updateActiveEscalateTarget('hover', targetId, true)
-              }
-              onPointerLeave={() => updateActiveEscalateTarget('hover', targetId, false)}
-              onFocus={() => !disabled && updateActiveEscalateTarget('focus', targetId, true)}
-              onBlur={() => updateActiveEscalateTarget('focus', targetId, false)}
-              onClick={onClick}
-              className={cn(
-                'flex size-6 shrink-0 items-center justify-center rounded-full',
-                'bg-text-primary text-surface-primary transition-opacity hover:opacity-85',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-xheavy',
-                'disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:opacity-35',
-              )}
-            >
-              <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.4} aria-hidden="true" />
-            </button>
-          }
-        />
-        <Ariakit.Tooltip className="z-50 rounded-lg bg-surface-tertiary px-2 py-1 text-xs text-text-primary shadow-lg">
-          {chord && isActive ? `${label} · ${chord}` : label}
-        </Ariakit.Tooltip>
-      </Ariakit.TooltipProvider>
-    </>
+    <Ariakit.TooltipProvider placement="top" timeout={300}>
+      <Ariakit.TooltipAnchor
+        render={
+          <button
+            type="button"
+            aria-label={accessibleLabel}
+            aria-keyshortcuts={isActive ? ariaKey : undefined}
+            data-escalate-steer={surface}
+            data-escalate-steer-active={isActive ? 'true' : undefined}
+            data-testid={surface === 'queued' ? 'queued-interrupt-now' : 'steer-escalate-now'}
+            disabled={disabled}
+            onPointerEnter={() => !disabled && updateActiveEscalateTarget('hover', targetId, true)}
+            onPointerLeave={() => updateActiveEscalateTarget('hover', targetId, false)}
+            onFocus={() => !disabled && updateActiveEscalateTarget('focus', targetId, true)}
+            onBlur={() => updateActiveEscalateTarget('focus', targetId, false)}
+            onClick={onClick}
+            className={cn(
+              'flex size-6 shrink-0 items-center justify-center rounded-full',
+              'bg-text-primary text-surface-primary transition-opacity hover:opacity-85',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-xheavy',
+              'disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:opacity-35',
+            )}
+          >
+            <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.4} aria-hidden="true" />
+          </button>
+        }
+      />
+      <Ariakit.Tooltip className="z-50 rounded-lg bg-surface-tertiary px-2 py-1 text-xs text-text-primary shadow-lg">
+        {chord && isActive ? `${label} · ${chord}` : label}
+      </Ariakit.Tooltip>
+    </Ariakit.TooltipProvider>
   );
 }
 
@@ -292,12 +286,12 @@ export function useDefaultToggleEntry(steering: SteeringControls): MenuEntry {
         next === 'queue'
           ? localize('com_ui_turn_on_queueing')
           : localize('com_ui_turn_on_steering'),
-      icon:
-        next === 'queue' ? (
-          <Clock className="h-4 w-4 text-cyan-500" aria-hidden="true" />
-        ) : (
-          <Zap className="h-4 w-4 text-amber-500" aria-hidden="true" />
-        ),
+      icon: (
+        <MorphIcon
+          icon={next === 'queue' ? Clock : Zap}
+          className={cn('h-4 w-4', next === 'queue' ? QUEUE_ICON : STEER_ICON)}
+        />
+      ),
       info: localize('com_nav_info_during_run_action'),
       onClick: () => steering.setDefaultAction(next),
     };
@@ -320,10 +314,11 @@ export function useInterruptToggleEntry(): MenuEntry {
       label: interruptsByDefault
         ? localize('com_ui_wait_for_tool_steps')
         : localize('com_ui_always_interrupt'),
-      icon: interruptsByDefault ? (
-        <Zap className="h-4 w-4 text-amber-500" aria-hidden="true" />
-      ) : (
-        <ZapOff className="h-4 w-4 text-amber-500" aria-hidden="true" />
+      icon: (
+        <MorphIcon
+          icon={interruptsByDefault ? Zap : ZapOff}
+          className={cn('h-4 w-4', STEER_ICON)}
+        />
       ),
       info: localize(
         !interruptsByDefault && defaultAction === 'queue'

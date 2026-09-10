@@ -10,17 +10,17 @@ import { useNavigateToConvo, useLocalize, useShiftKey } from '~/hooks';
 import { BRAND_HIDE_CONVO_ICON } from '~/brand';
 import ConversationEndpointIcon from './ConversationEndpointIcon';
 import { areConversationRenderPropsEqual } from './utils';
+import { cn, logger, setDocumentTitle } from '~/utils';
 import { NotificationSeverity } from '~/common';
-import { ConvoOptions } from './ConvoOptions';
+import ConvoActions from './ConvoActions';
 import RenameForm from './RenameForm';
-import { cn, logger } from '~/utils';
 import ConvoLink from './ConvoLink';
 import store from '~/store';
 
 interface ConversationProps {
   conversation: TConversation;
   retainView: () => void;
-  toggleNav: () => void;
+  toggleNav: (afterSlide?: () => void) => void;
   isGenerating?: boolean;
 }
 
@@ -49,6 +49,7 @@ function Conversation({
   const [titleInput, setTitleInput] = useState(title || '');
   const [renaming, setRenaming] = useState(false);
   const [isPopoverActive, setIsPopoverActive] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   // Lazy-load ConvoOptions to avoid running heavy hooks for all conversations
   const [hasInteracted, setHasInteracted] = useState(false);
 
@@ -160,14 +161,15 @@ function Conversation({
       return;
     }
 
-    toggleNav();
+    /** The navigation rides `afterSlide`: run synchronously it flushes the
+     * conversation-switch commit in the tap's task, stalling the drawer's
+     * first frame — the exact delay the animated toggle exists to avoid. */
+    toggleNav(() => {
+      setDocumentTitle(title);
 
-    if (typeof title === 'string' && title.length > 0) {
-      document.title = title;
-    }
-
-    navigateToConvo(conversation, {
-      currentConvoId,
+      navigateToConvo(conversation, {
+        currentConvoId,
+      });
     });
   };
 
@@ -180,7 +182,7 @@ function Conversation({
     conversationId,
     chatProjectId: conversation.chatProjectId,
     isPopoverActive,
-    setIsPopoverActive: handlePopoverOpenChange,
+    onOpenChange: handlePopoverOpenChange,
     isShiftHeld: isActiveConvo ? isShiftHeld : false,
   };
 
@@ -194,7 +196,8 @@ function Conversation({
     'pointer-events-none max-w-0 scale-x-0 opacity-0 group-focus-within:pointer-events-auto group-focus-within:max-w-[60px] group-focus-within:scale-x-100 group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:max-w-[60px] group-hover:scale-x-100 group-hover:opacity-100';
   if (isGenerating) {
     actionVisibilityClassName = 'pointer-events-none w-5 scale-x-100 opacity-100';
-  } else if (isPopoverActive || isActiveConvo) {
+  } else if (isPopoverActive || isActiveConvo || isSmallScreen) {
+    /** Touch has no hover, so a reveal-on-hover menu is unreachable there. */
     actionVisibilityClassName = 'pointer-events-auto scale-x-100 opacity-100';
   }
 
@@ -202,13 +205,15 @@ function Conversation({
   if (!isGenerating && !isPopoverActive && isActiveConvo && isShiftHeld) {
     actionWidthClassName = 'max-w-[60px]';
   } else if (!isGenerating) {
-    actionWidthClassName = 'max-w-[28px]';
+    actionWidthClassName = isSmallScreen ? 'max-w-[36px]' : 'max-w-[28px]';
   }
 
-  const showConvoOptions = !renaming && (hasInteracted || isActiveConvo);
-  const actionContent = isGenerating
-    ? generatingSpinner
-    : showConvoOptions && <ConvoOptions {...convoOptionsProps} />;
+  let actionContent: React.ReactNode = null;
+  if (isGenerating) {
+    actionContent = generatingSpinner;
+  } else if (!renaming) {
+    actionContent = <ConvoActions {...convoOptionsProps} hasInteracted={hasInteracted} />;
+  }
 
   return (
     <div
@@ -219,17 +224,13 @@ function Conversation({
           ? 'bg-surface-active-alt before:absolute before:bottom-1 before:left-0 before:top-1 before:w-0.5 before:rounded-full before:bg-text-primary'
           : 'hover:bg-surface-active-alt',
       )}
-      role="button"
-      tabIndex={renaming ? -1 : 0}
-      aria-label={
-        isSharedBadgeVisible
-          ? localize('com_ui_conversation_label_shared', {
-              title: title || localize('com_ui_untitled'),
-            })
-          : localize('com_ui_conversation_label', {
-              title: title || localize('com_ui_untitled'),
-            })
-      }
+      onPointerEnter={(event) => {
+        if (event.pointerType === 'mouse') {
+          setIsHovered(true);
+        }
+      }}
+      onPointerLeave={() => setIsHovered(false)}
+      onPointerCancel={() => setIsHovered(false)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onFocus={handleMouseEnter}
@@ -240,18 +241,6 @@ function Conversation({
         }
         if (e.button === 0) {
           handleNavigation(e.ctrlKey || e.metaKey);
-        }
-      }}
-      onKeyDown={(e) => {
-        if (renaming) {
-          return;
-        }
-        if (e.target !== e.currentTarget) {
-          return;
-        }
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          handleNavigation(false);
         }
       }}
       style={{ cursor: renaming ? 'default' : 'pointer' }}
@@ -269,6 +258,8 @@ function Conversation({
         <ConvoLink
           isActiveConvo={isActiveConvo}
           isPopoverActive={isPopoverActive}
+          isHovered={isHovered}
+          isSharedBadgeVisible={isSharedBadgeVisible}
           title={title}
           onRename={handleRename}
           isSmallScreen={isSmallScreen}

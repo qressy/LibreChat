@@ -12,10 +12,9 @@
  * bare `R G B` channel triplets, so `cssVar` wraps them as
  * `rgb(var(--x) / <alpha-value>)`. This makes opacity modifiers work, e.g.
  * `bg-surface-primary/50`. Tokens with an intrinsic alpha use a companion
- * `--x-alpha` variable that is multiplied by Tailwind's opacity modifier.
- * shadcn-compatible tokens still hold HSL triplets, so they are wrapped in
- * `hsl(...)`; any direct `var(--token)` usage in plain CSS must wrap the channel
- * triplet itself, e.g. `color: rgb(var(--text-primary))`.
+ * `--x-alpha` variable that is multiplied by Tailwind's opacity modifier. Every
+ * token is an `R G B` triplet, so a direct `var(--token)` usage in plain CSS
+ * must wrap the channel triplet itself, e.g. `color: rgb(var(--text-primary))`.
  */
 
 const palette = {
@@ -28,6 +27,7 @@ const palette = {
     400: '#999696',
     500: '#595959',
     600: '#424242',
+    650: '#393939',
     700: '#2f2f2f',
     800: '#212121',
     850: '#171717',
@@ -50,7 +50,6 @@ const palette = {
 
 const cssVar = (name) => `rgb(var(${name}) / <alpha-value>)`;
 const cssVarWithAlpha = (name) => `rgb(var(${name}) / calc(var(${name}-alpha, 1) * <alpha-value>))`;
-const hslVar = (name) => `hsl(var(${name}))`;
 
 /**
  * Creates the Tailwind `theme.extend.colors` object backed by CSS variables.
@@ -68,6 +67,9 @@ function createTailwindColors() {
     'text-secondary': cssVar('--text-secondary'),
     'text-secondary-alt': cssVar('--text-secondary-alt'),
     'text-tertiary': cssVar('--text-tertiary'),
+    'text-muted': cssVar('--text-muted'),
+    'chart-widget-surface': cssVar('--chart-widget-surface'),
+    'chart-widget-stroke': cssVar('--chart-widget-stroke'),
     'text-warning': cssVar('--text-warning'),
     'text-destructive': cssVar('--text-destructive'),
 
@@ -88,6 +90,7 @@ function createTailwindColors() {
     'surface-active-alt': cssVar('--surface-active-alt'),
     'surface-hover': cssVar('--surface-hover'),
     'surface-hover-alt': cssVar('--surface-hover-alt'),
+    'surface-composer-hover': cssVar('--surface-composer-hover'),
     'surface-primary': cssVar('--surface-primary'),
     'surface-primary-alt': cssVar('--surface-primary-alt'),
     'surface-primary-contrast': cssVar('--surface-primary-contrast'),
@@ -102,6 +105,7 @@ function createTailwindColors() {
     'surface-destructive': cssVar('--surface-destructive'),
     'surface-destructive-hover': cssVar('--surface-destructive-hover'),
     'surface-chat': cssVar('--surface-chat'),
+    'surface-code': cssVar('--surface-code'),
     'surface-qr': cssVar('--surface-qr'),
     'surface-inverted': cssVar('--surface-inverted'),
     'surface-inverted-hover': cssVar('--surface-inverted-hover'),
@@ -138,7 +142,15 @@ function createTailwindColors() {
     'status-neutral-border': cssVar('--status-neutral-border'),
     'text-on-status': cssVar('--text-on-status'),
 
-    'switch-unchecked': hslVar('--switch-unchecked'),
+    'series-1': cssVar('--series-1'),
+    'series-2': cssVar('--series-2'),
+    'series-3': cssVar('--series-3'),
+    'series-4': cssVar('--series-4'),
+    'series-5': cssVar('--series-5'),
+    'series-6': cssVar('--series-6'),
+    'series-7': cssVar('--series-7'),
+
+    'switch-unchecked': cssVar('--switch-unchecked'),
   };
 }
 

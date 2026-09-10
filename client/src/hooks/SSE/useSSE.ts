@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { v4 } from 'uuid';
 import { SSE } from 'sse.js';
+import { useStore } from 'jotai';
 import { useSetRecoilState } from 'recoil';
 import {
   request,
@@ -19,8 +20,10 @@ import type {
 } from 'librechat-data-provider';
 import type { EventHandlerParams } from './useEventHandlers';
 import type { TResData } from '~/common';
-import { clearAllDrafts, applyPendingAction, findPendingActionMessageIndex } from '~/utils';
+import { clearComposerDrafts, applyPendingAction, findPendingActionMessageIndex } from '~/utils';
+import { pendingApprovalActionFamily } from '~/components/Chat/approval/state';
 import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
+import { startedAsNewConversation } from './useEventHandlers';
 import { useAuthContext } from '~/hooks/AuthContext';
 import useEventHandlers from './useEventHandlers';
 import useUsageHandler from './useUsageHandler';
@@ -37,6 +40,7 @@ export default function useSSE(
   isAddedRequest = false,
   runIndex = 0,
 ) {
+  const jotaiStore = useStore();
   const setActiveRunId = useSetRecoilState(store.activeRunFamily(runIndex));
 
   const { token, isAuthenticated } = useAuthContext();
@@ -66,6 +70,7 @@ export default function useSSE(
     getMessages,
     setCompleted,
     isAddedRequest,
+    runIndex,
     setConversation,
     setIsSubmitting,
     newConversation,
@@ -121,7 +126,9 @@ export default function useSSE(
         /** A queued delta flush reading the older streaming copy must never
          * land on top of the server-final write. */
         cancelPendingDeltaFlush();
-        clearAllDrafts(submission.conversation?.conversationId);
+        clearComposerDrafts(runIndex, submission.conversation?.conversationId, {
+          includeNewChatDraft: startedAsNewConversation(submission),
+        });
         try {
           finalHandler(data, submission as EventSubmission);
           finalizeUsage(data, { ...submission, userMessage });
@@ -154,6 +161,11 @@ export default function useSSE(
          * produced — apply any queued delta before reading the cache. */
         flushPendingDeltas();
         const pendingAction = data.data as Agents.PendingAction;
+        const pendingConversationId =
+          pendingAction.conversationId ?? submission.conversation?.conversationId;
+        if (pendingConversationId) {
+          jotaiStore.set(pendingApprovalActionFamily(pendingConversationId), pendingAction);
+        }
         const messages = getMessages() ?? [];
         const index = findPendingActionMessageIndex(messages, pendingAction);
         if (index >= 0) {

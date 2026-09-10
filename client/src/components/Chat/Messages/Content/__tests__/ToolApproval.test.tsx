@@ -102,4 +102,54 @@ describe('ToolApproval', () => {
     fireEvent.click(approveSecond);
     expect(submit).toBeEnabled();
   });
+
+  test('duplicated review surfaces show and submit the same decision state', () => {
+    renderCards(
+      <>
+        <ToolApproval approval={approval()} toolCallId="call-1" args={{ a: 1 }} />
+        <ToolApproval
+          approval={approval()}
+          toolCallId="call-1"
+          args={{ a: 1 }}
+          showSubmit={false}
+        />
+      </>,
+    );
+
+    const [timelineApprove, composerApprove] = screen.getAllByRole('button', { name: 'Approve' });
+    const [timelineReject, composerReject] = screen.getAllByRole('button', { name: 'Reject' });
+
+    fireEvent.click(timelineApprove);
+    expect(timelineApprove).toHaveAttribute('aria-pressed', 'true');
+    expect(composerApprove).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(composerReject);
+    expect(timelineApprove).toHaveAttribute('aria-pressed', 'false');
+    expect(composerApprove).toHaveAttribute('aria-pressed', 'false');
+    expect(timelineReject).toHaveAttribute('aria-pressed', 'true');
+    expect(composerReject).toHaveAttribute('aria-pressed', 'true');
+    const [timelineReason, composerReason] = screen.getAllByRole('textbox', { name: 'Reject' });
+    fireEvent.change(timelineReason, { target: { value: 'not on this machine' } });
+    expect(timelineReason).toHaveValue('not on this machine');
+    expect(composerReason).toHaveValue('not on this machine');
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled();
+  });
+
+  test('restores a selected decision when the card remounts inside the same message', () => {
+    const tree = (key: string) => (
+      <RecoilRoot>
+        <ApprovalProvider>
+          <ToolApproval key={key} approval={approval()} toolCallId="call-1" args={{ a: 1 }} />
+        </ApprovalProvider>
+      </RecoilRoot>
+    );
+    const view = render(tree('direct'));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(screen.getByRole('button', { name: 'Approve' })).toHaveAttribute('aria-pressed', 'true');
+
+    view.rerender(tree('phase-slice'));
+
+    expect(screen.getByRole('button', { name: 'Approve' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled();
+  });
 });

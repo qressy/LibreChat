@@ -1,4 +1,5 @@
-import type { CodeEnvRef } from '../codeEnvRef';
+import type { TDefaultLLMDeliveryPathConfig } from '../file-config';
+import type { CodeEnvRef, CodeEnvRefMap } from '../codeEnvRef';
 import { EToolResources } from './assistants';
 
 export enum FileSources {
@@ -48,6 +49,8 @@ export type EndpointFileConfig = {
   fileSizeLimit?: number;
   totalSizeLimit?: number;
   supportedMimeTypes?: RegexLike[];
+  defaultLLMDeliveryPath?: TDefaultLLMDeliveryPathConfig;
+  legacyFileUploadUX?: boolean;
 };
 
 export type FileConfig = {
@@ -58,6 +61,10 @@ export type FileConfig = {
     fileSizeLimit?: number;
   };
   fileTokenLimit?: number;
+  /** Maximum aggregate model-bound attachment bytes admitted into one agent turn. */
+  fileContextSizeLimit?: number;
+  /** Maximum aggregate extracted-text characters admitted into one agent turn. */
+  fileContextCharLimit?: number;
   serverFileSizeLimit?: number;
   avatarSizeLimit?: number;
   clientImageResize?: {
@@ -65,6 +72,8 @@ export type FileConfig = {
     maxWidth?: number;
     maxHeight?: number;
     quality?: number;
+    /** Set when `enabled` came from the admin config, in which case it wins over the user's setting */
+    enforced?: boolean;
   };
   ocr?: {
     supportedMimeTypes?: RegexLike[];
@@ -76,6 +85,8 @@ export type FileConfig = {
     supportedMimeTypes?: RegexLike[];
   };
   checkType?: (fileType: string, supportedTypes: RegexLike[]) => boolean;
+  defaultLLMDeliveryPath?: TDefaultLLMDeliveryPathConfig;
+  legacyFileUploadUX?: boolean;
 };
 
 export type FileConfigInput = {
@@ -87,6 +98,8 @@ export type FileConfigInput = {
   };
   serverFileSizeLimit?: number;
   avatarSizeLimit?: number;
+  fileContextSizeLimit?: number;
+  fileContextCharLimit?: number;
   clientImageResize?: {
     enabled?: boolean;
     maxWidth?: number;
@@ -103,6 +116,8 @@ export type FileConfigInput = {
     supportedMimeTypes?: string[];
   };
   checkType?: (fileType: string, supportedTypes: RegexLike[]) => boolean;
+  defaultLLMDeliveryPath?: TDefaultLLMDeliveryPathConfig;
+  legacyFileUploadUX?: boolean;
 };
 
 export type TFile = {
@@ -162,7 +177,17 @@ export type TFile = {
      * resolve via `resolveCodeEnvRef`.
      */
     codeEnvRef?: CodeEnvRef;
+    codeEnvRefs?: CodeEnvRefMap;
+    /** Dispatch-order stamp for the current source artifact generation. */
+    sourceDispatchedAt?: number;
+    /** Vector namespaces this file has been embedded into. */
+    embeddedEntities?: string[];
+    /** The user named this destination, so absent ones were declined. */
+    destinationChosen?: boolean;
+    /** The type the delivery route was resolved against, when conversion changed it. */
+    routingMimeType?: string;
   };
+  llmDeliveryPath?: 'provider' | 'text' | 'none';
   createdAt?: string | Date;
   updatedAt?: string | Date;
 };
@@ -251,7 +276,9 @@ export type TFilesUsageResponse = {
 
 export type DeleteFilesResponse = {
   message: string;
-  result: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  deletedFileIds?: string[];
+  failedFileIds?: string[];
 };
 
 export type BatchFile = {
@@ -275,4 +302,7 @@ export type DeleteMutationOptions = {
   onSuccess?: (data: DeleteFilesResponse, variables: DeleteFilesBody, context?: unknown) => void;
   onMutate?: (variables: DeleteFilesBody) => void | Promise<unknown>;
   onError?: (error: unknown, variables: DeleteFilesBody, context?: unknown) => void;
+  /** Suppresses the result toasts. Background cleanup runs on a timer the user never asked for,
+   * and a storage failure that keeps failing would otherwise announce itself on every retry. */
+  silent?: boolean;
 };

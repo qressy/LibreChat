@@ -1,10 +1,14 @@
 export * from './app';
+export * from './acl/accessControlService';
+export * from './acl/insightsPermissions';
+export * from './acl/middleware';
 export * from './credentials';
 /* Artifacts */
 export * from './artifacts';
 /* Admin */
 export * from './admin';
 export * from './cdn';
+export * from './code';
 /* Auth */
 export * from './auth';
 /* API Keys */
@@ -20,13 +24,16 @@ export * from './mcp/oauth';
 export * from './mcp/auth';
 export * from './mcp/zod';
 export * from './mcp/errors';
+export * from './mcp/openid';
 export * from './mcp/cache';
 export * from './mcp/tools';
 export * from './mcp/apps';
 export * from './mcp/sandbox';
 export * from './mcp/catalog/store';
+export * from './mcp/catalog/recovery';
 export * from './mcp/assistants';
 export * from './mcp/request';
+export * from './mcp/icons';
 /* Utilities */
 export * from './mcp/utils';
 export * from './mcp/context';
@@ -45,27 +52,43 @@ export * from './crypto';
 export * from './flow/manager';
 /* Middleware */
 export * from './middleware';
+/* Security */
+export * from './security';
+/* Content protection */
+export * from './protection';
+/* Imports */
+export * from './imports';
 /* Memory */
 export * from './memory';
 /* Model Specs */
 export * from './modelSpecs';
 /* Agents */
 export * from './agents';
+/* Assistants */
+export * from './assistants';
 /* Actions */
 export * from './actions';
 /* Prompts */
 export * from './prompts';
 /* Projects */
 export * from './projects';
+/* Conversations */
+export * from './conversations';
 /* Skills */
+export * from './schedules';
+export * from './schedules/service';
 export * from './skills';
 export * from './favorites';
+/* User */
+export * from './user';
 /* Agent Plugins */
 export * from './plugins';
 /* Endpoints */
 export * from './endpoints';
 /* Files */
 export * from './files';
+/* Images */
+export * from './images';
 /* Storage */
 export * from './storage';
 /* Tools */
@@ -74,6 +97,8 @@ export * from './tools';
 export * from './web';
 /* Langfuse */
 export * from './langfuse';
+/* Insights */
+export * from './insights';
 /* Cache */
 export * from './cache';
 /* Shared Links */
@@ -81,6 +106,8 @@ export * from './shared-links/access';
 export * from './shared-links/service';
 export * from './shared-links/config';
 export * from './shared-links/http';
+export * from './shared-links/protection';
+export * from './shared-links/session';
 /* Stream */
 export * from './stream';
 /* Diagnostics */

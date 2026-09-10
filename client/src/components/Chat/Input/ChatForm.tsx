@@ -1,9 +1,10 @@
 import { memo, useRef, useMemo, useEffect, useState, useCallback } from 'react';
 import { useWatch } from 'react-hook-form';
-import { TextareaAutosize } from '@librechat/client';
 import { useRecoilState, useRecoilValue, useRecoilCallback } from 'recoil';
 import { Constants, isAssistantsEndpoint, isAgentsEndpoint } from 'librechat-data-provider';
-import type { TMessage, TConversation } from 'librechat-data-provider';
+import { composerSurfaceClasses, composerSurfaceShadow, TextareaAutosize } from '@librechat/client';
+import type { TChatProject, TMessage, TConversation } from 'librechat-data-provider';
+import type { SetterOrUpdater } from 'recoil';
 import type { ExtendedFile, FileSetter, ConvoGenerator } from '~/common';
 import type { QueuedMessageContext } from '~/hooks/Chat/useSteering';
 import {
@@ -15,19 +16,35 @@ import {
   useQueryParams,
   useSubmitMessage,
   useFocusChatEffect,
+  useCodeWorkspace,
 } from '~/hooks';
+import {
+  cn,
+  getModelSpec,
+  hasIncompleteFiles,
+  removeFocusRings,
+  getComposerDraftId,
+  getFilesDraftCached,
+  isPastedTextFileMarked,
+} from '~/utils';
 import {
   useChatContext,
   useChatFormContext,
   useAddedChatContext,
   useAssistantsMapContext,
 } from '~/Providers';
+import {
+  PendingToolApprovalButton,
+  PendingToolApprovalPanel,
+} from '~/components/Chat/approval/Review';
 import PendingManualSkillsChips from './PendingManualSkillsChips';
+import usePastedTextEdit from '~/hooks/Files/usePastedTextEdit';
 import useAskAnswerMode from '~/hooks/Input/useAskAnswerMode';
 import AskUserQuestionPopover from './AskUserQuestionPopover';
-import { cn, getModelSpec, removeFocusRings } from '~/utils';
 import InterruptSteerButton from './InterruptSteerButton';
+import PastedTextDialog from './Files/PastedTextDialog';
 import DuringRunSendButton from './DuringRunSendButton';
+import ProjectLandingChip from '../ProjectLandingChip';
 import { useGetStartupConfig } from '~/data-provider';
 import { mainTextareaId, BadgeItem } from '~/common';
 import PendingSteerChips from './PendingSteerChips';
@@ -35,16 +52,18 @@ import PendingQuoteChips from './PendingQuoteChips';
 import { BRAND_SHIPS_FROM_SELECTOR } from '~/brand';
 import CountrySelector from './CountrySelector';
 import AttachFileChat from './Files/AttachFileChat';
+import CodeWorkspaceMenu from './CodeWorkspaceMenu';
 import useSteering from '~/hooks/Chat/useSteering';
+import CodeApprovalMenu from './CodeApprovalMenu';
 import FileFormChat from './Files/FileFormChat';
 import InFlightSteers from './InFlightSteers';
 import TextareaHeader from './TextareaHeader';
 import PromptsCommand from './PromptsCommand';
 import SkillsCommand from './SkillsCommand';
 import AudioRecorder from './AudioRecorder';
+import AutoPlayAudio from './AutoPlayAudio';
 import CollapseChat from './CollapseChat';
 import QuoteButton from './QuoteButton';
-import StreamAudio from './StreamAudio';
 import TokenUsage from './TokenUsage';
 import StopButton from './StopButton';
 import SendButton from './SendButton';
@@ -56,26 +75,45 @@ import store from '~/store';
 interface ChatFormProps {
   index: number;
   placeholder?: string;
-  /** From ChatContext — individual values so memo can compare them */
+  project?: TChatProject;
+  /** From ChatContext: individual values so memo can compare them */
   files: Map<string, ExtendedFile>;
   setFiles: FileSetter;
   conversation: TConversation | null;
+  setConversation: SetterOrUpdater<TConversation | null>;
   isSubmitting: boolean;
-  filesLoading: boolean;
   setFilesLoading: React.Dispatch<React.SetStateAction<boolean>>;
   newConversation: ConvoGenerator;
   handleStopGenerating: (e: React.MouseEvent<HTMLButtonElement>) => void;
   stopGenerating: () => void;
 }
 
+/** Targets that own focus themselves: form fields and links, popup disclosures
+ * (Ariakit and Radix both emit `aria-haspopup`), and popup content, which React
+ * bubbles through portals. */
+const focusOwningTargetSelector = [
+  'a',
+  'input',
+  'select',
+  'textarea',
+  'label',
+  '[aria-haspopup]:not([aria-haspopup="false"])',
+  '[role="combobox"]',
+  '[role="menu"]',
+  '[role="listbox"]',
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+].join(', ');
+
 const ChatForm = memo(function ChatForm({
   index,
   placeholder,
+  project,
   files,
   setFiles,
   conversation,
+  setConversation,
   isSubmitting,
-  filesLoading,
   setFilesLoading,
   newConversation,
   handleStopGenerating,
@@ -125,6 +163,7 @@ const ChatForm = memo(function ChatForm({
     [conversation?.spec, startupConfig],
   );
   const hideBadgeRow = modelSpec?.hideBadgeRow === true;
+  const filesLoading = useMemo(() => hasIncompleteFiles(files), [files]);
   const conversationId = useMemo(
     () => conversation?.conversationId ?? Constants.NEW_CONVO,
     [conversation?.conversationId],
@@ -152,13 +191,37 @@ const ChatForm = memo(function ChatForm({
     [requiresKey, invalidAssistant],
   );
 
-  const handleContainerClick = useCallback(() => {
-    /** Check if the device is a touchscreen */
+  /** Skipped on touchscreens so a tap does not raise the keyboard. */
+  const focusTextArea = useCallback(() => {
     if (window.matchMedia?.('(pointer: coarse)').matches) {
       return;
     }
     textAreaRef.current?.focus();
   }, []);
+
+  /** The surface returns focus to the textarea after any click (send, stop, badge
+   * toggles), except when the target owns focus itself or opens a popup. Ariakit
+   * records `document.activeElement` at open time as a menu's disclosure, so
+   * refocusing the textarea behind a menu button made the textarea the disclosure
+   * and the menu could never close on textarea interaction (#15624). */
+  const handleContainerClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const owner =
+        event.target instanceof Element ? event.target.closest(focusOwningTargetSelector) : null;
+      if (owner && !owner.contains(event.currentTarget)) {
+        return;
+      }
+      focusTextArea();
+    },
+    [focusTextArea],
+  );
+
+  /** Actions that consume the composer from inside a popup (the during-run
+   * hovercard) sit in exempted popup content, so they restore focus themselves. */
+  const consumeComposer = useCallback(() => {
+    methods.reset();
+    focusTextArea();
+  }, [methods, focusTextArea]);
 
   const handleFocusOrClick = useCallback(() => {
     if (isCollapsed) {
@@ -176,8 +239,16 @@ const ChatForm = memo(function ChatForm({
   }, []);
 
   const answerMode = useAskAnswerMode(conversationId);
+  const answerPlaceholder = answerMode.batchMode
+    ? localize('com_ui_answer_questions_above')
+    : (answerMode.otherLabel ?? localize('com_ui_something_else'));
+  /** The composer is not a plain chat composer: it either IS this pause's
+   *  answer box, or is locked behind the batch card that owns the answer. A
+   *  collapsed batch is neither — it hands the composer back to the thread. */
+  const composerReserved = answerMode.composerAnswers || answerMode.composerLocked;
 
   useAutoSave({
+    index,
     files,
     setFiles,
     textAreaRef,
@@ -189,7 +260,33 @@ const ChatForm = memo(function ChatForm({
     draftId: answerMode.draftId,
   });
 
+  const pastedTextEdit = usePastedTextEdit({ index, files, setFiles, textAreaRef });
+
+  /** Provenance, not the filename, decides which chips are pastes: a user can deliberately
+   * upload a `pasted-text.txt`. Restored provenance comes from the files draft; marks made
+   * this session are read live from the registry, so new pastes need no recompute. */
+  const pastedTextFileIds = useMemo(() => {
+    const draftId = getComposerDraftId(index, conversationId, isSubmitting);
+    const draftIds = getFilesDraftCached(draftId).pastedTextIds ?? [];
+    return new Set<string>(draftIds);
+  }, [index, conversationId, isSubmitting]);
+  const isPastedTextFile = useCallback(
+    (file: ExtendedFile) =>
+      pastedTextFileIds.has(file.file_id) ||
+      (file.temp_file_id != null && pastedTextFileIds.has(file.temp_file_id)) ||
+      isPastedTextFileMarked(file.file_id) ||
+      isPastedTextFileMarked(file.temp_file_id),
+    [pastedTextFileIds],
+  );
+  /** The chip's actions hide while a replacement upload or inline move is in flight, so the
+   * same original cannot be acted on twice. */
+  const isPasteActionPending = useCallback(
+    (file: ExtendedFile) => pastedTextEdit.isActionPending(file.file_id),
+    [pastedTextEdit],
+  );
+
   const { submitMessage, submitPrompt } = useSubmitMessage();
+  const codeWorkspace = useCodeWorkspace(conversation, addedConvo);
 
   /** Queued/steered sends carry their FULL submission context: explicit
    *  (possibly empty) overrides stop `ask` from vacuuming quotes or skill
@@ -265,7 +362,7 @@ const ChatForm = memo(function ChatForm({
     conversationId,
     conversation,
     isSubmitting,
-    answerModeActive: answerMode.active,
+    answerModeActive: composerReserved,
     files,
     setFiles,
     filesLoading,
@@ -283,8 +380,8 @@ const ChatForm = memo(function ChatForm({
   const liveFilesRef = useRef(files);
   liveFilesRef.current = files;
   /** Same reason: the run can pause on `ask_user_question` mid-reclaim. */
-  const liveAnswerModeRef = useRef(answerMode.active);
-  liveAnswerModeRef.current = answerMode.active;
+  const liveAnswerModeRef = useRef(composerReserved);
+  liveAnswerModeRef.current = composerReserved;
   /** A reclaim can resolve after this form unmounts (left the route, closed the
    *  pane). Its refs still hold the origin chat, so the restore would pass its
    *  checks and write into a dead form — reporting success and making the caller
@@ -389,18 +486,23 @@ const ChatForm = memo(function ChatForm({
     setIsScrollable,
     disabled: disableInputs,
     // The composer IS the free-form answer box while a question pause is live.
-    placeholder: answerMode.active
-      ? (answerMode.otherLabel ?? localize('com_ui_something_else'))
-      : placeholder,
+    placeholder: composerReserved ? answerPlaceholder : placeholder,
     // Enter stays live during a run when it can steer/queue instead of send.
     allowSubmitWhileGenerating: steering.duringRunActive,
     onDuringRunModifier: steering.duringRunActive ? handleDuringRunModifier : undefined,
+    answerModeActive: answerMode.composerAnswers,
   });
 
   useQueryParams({ textAreaRef });
 
+  /** Attachments stand in for text only on the normal send path. Answer mode
+   *  hands the composer text straight to the paused run, which answers with
+   *  values and cannot consume files, so an empty draft must stay unsubmittable
+   *  there rather than enabling a button whose submit is silently dropped. */
+  const submittableFileCount = composerReserved ? 0 : files.size;
+
   const { ref, ...registerProps } = methods.register('text', {
-    required: true,
+    required: submittableFileCount === 0,
     onChange: useCallback(
       (e: React.ChangeEvent<HTMLTextAreaElement>) =>
         methods.setValue('text', e.target.value, { shouldValidate: true }),
@@ -450,7 +552,7 @@ const ChatForm = memo(function ChatForm({
           control={methods.control}
           steering={steering}
           getText={() => methods.getValues('text')}
-          onConsumed={() => methods.reset()}
+          onConsumed={consumeComposer}
           disabled={filesLoading}
         />
       );
@@ -476,7 +578,8 @@ const ChatForm = memo(function ChatForm({
       onSubmit={methods.handleSubmit((data) => {
         // Answer mode: composer text answers the paused run instead of
         // starting a new turn (submitText resets the composer itself).
-        // Dismissing the popover restores normal sends.
+        // Dismissing the popover — or collapsing a batch, which answers in its
+        // own card — restores normal sends.
         if (answerMode.active && answerMode.submitText(data.text)) {
           return;
         }
@@ -501,7 +604,7 @@ const ChatForm = memo(function ChatForm({
           : 'sm:mb-10',
       )}
     >
-      <div className="relative flex h-full flex-1 items-stretch md:flex-col">
+      <div className="relative flex h-full min-w-0 flex-1 items-stretch md:flex-col">
         {/* Primary composer owns the selection popup so split-view doesn't double it. */}
         {index === 0 && quotesEnabled && <QuoteButton conversationId={conversationId} />}
         {/* `relative` anchors the in-flight steer overlay, which floats above
@@ -536,6 +639,9 @@ const ChatForm = memo(function ChatForm({
             {index === 0 && (
               <AskUserQuestionPopover conversationId={conversationId} textAreaRef={textAreaRef} />
             )}
+            {index === 0 && conversationId != null && (
+              <PendingToolApprovalPanel conversationId={conversationId} />
+            )}
             <SkillsCommand
               index={index}
               textAreaRef={textAreaRef}
@@ -543,18 +649,31 @@ const ChatForm = memo(function ChatForm({
               agentId={conversation?.agent_id}
             />
             <div
+              data-testid="composer-surface"
               onClick={handleContainerClick}
               className={cn(
-                'relative flex w-full flex-grow flex-col overflow-hidden rounded-t-3xl border pb-4 text-text-primary transition-all duration-200 sm:rounded-3xl sm:pb-0',
-                isTextAreaFocused ? 'shadow-lg' : 'shadow-md',
-                isTemporary
-                  ? 'border-violet-800/60 bg-violet-950/10'
-                  : 'border-border-light bg-surface-chat',
+                'relative flex w-full flex-grow flex-col overflow-hidden rounded-t-3xl pb-4 sm:rounded-3xl sm:pb-0',
+                composerSurfaceClasses(),
+                isTextAreaFocused ? composerSurfaceShadow.focused : composerSurfaceShadow.blurred,
+                /* Temporary-chat accent is a ChatForm-only override, not part of
+                   the shared composer-surface decision. Semantic `series-6`, the
+                   same categorical slot the purple tool badge uses, so the accent
+                   follows the theme instead of the raw `violet-800/60` edge that
+                   composited to 1.48:1 on the high contrast dark canvas.
+                   Held at half alpha in the standard palettes, where series-6 is
+                   a saturated #7e23cd / #ab68fe and a full-strength edge reads as
+                   a warning rather than a quiet mode hint. The contrast modes take
+                   it opaque, because that is the only way it clears the 3:1
+                   non-text floor there. */
+                isTemporary && 'border-series-6/50 bg-series-6/10 high-contrast:border-series-6',
               )}
             >
+              {project ? <ProjectLandingChip project={project} /> : null}
               <TextareaHeader addedConvo={addedConvo} setAddedConvo={setAddedConvo} />
               <PendingManualSkillsChips conversationId={conversationId} />
-              {quotesEnabled && <PendingQuoteChips conversationId={conversationId} />}
+              {quotesEnabled && (
+                <PendingQuoteChips conversationId={conversationId} focusComposer={focusTextArea} />
+              )}
               {steering.enabled && (
                 <PendingSteerChips
                   conversationId={conversationId}
@@ -571,10 +690,20 @@ const ChatForm = memo(function ChatForm({
                 setBadges={setBadges}
               />
               <FileFormChat
+                index={index}
                 conversation={conversation}
                 files={files}
                 setFiles={setFiles}
                 setFilesLoading={setFilesLoading}
+                isPastedTextFile={isPastedTextFile}
+                isPasteActionPending={isPasteActionPending}
+                onEditPastedText={pastedTextEdit.openEditor}
+                onMovePastedTextInline={pastedTextEdit.moveInline}
+              />
+              <PastedTextDialog
+                edit={pastedTextEdit.editing}
+                onClose={pastedTextEdit.closeEditor}
+                onSave={pastedTextEdit.saveEdit}
               />
               {endpoint && (
                 <div className={cn('flex', isRTL ? 'flex-row-reverse' : 'flex-row')}>
@@ -598,7 +727,7 @@ const ChatForm = memo(function ChatForm({
                           textAreaRef as React.MutableRefObject<HTMLTextAreaElement | null>
                         ).current = e;
                       }}
-                      disabled={disableInputs || isNotAppendable}
+                      disabled={disableInputs || isNotAppendable || answerMode.composerLocked}
                       onPaste={handlePaste}
                       onKeyDown={(e) => {
                         // Answer mode consumes option-navigation keys from the
@@ -668,6 +797,21 @@ const ChatForm = memo(function ChatForm({
                     Array.isArray(conversation?.messages) && conversation.messages.length >= 1
                   }
                 />
+                <CodeApprovalMenu
+                  conversation={conversation}
+                  addedConversation={addedConvo}
+                  setConversation={setConversation}
+                  disabled={disableInputs || isSubmitting}
+                />
+                <CodeWorkspaceMenu
+                  conversation={conversation}
+                  setConversation={setConversation}
+                  workspace={codeWorkspace}
+                  disabled={disableInputs || isSubmitting}
+                />
+                {index === 0 && conversationId != null && (
+                  <PendingToolApprovalButton conversationId={conversationId} />
+                )}
                 <div className="mx-auto flex" />
                 <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
                 {SpeechToText && (
@@ -685,7 +829,7 @@ const ChatForm = memo(function ChatForm({
                       <InterruptSteerButton
                         steering={steering}
                         getText={() => methods.getValues('text')}
-                        onConsumed={() => methods.reset()}
+                        onConsumed={consumeComposer}
                         disabled={filesLoading}
                       />
                     </div>
@@ -693,23 +837,26 @@ const ChatForm = memo(function ChatForm({
                 <div className={`${isRTL ? 'ml-2' : 'mr-2'}`}>
                   {isSubmitting &&
                   (showStopButton || steering.duringRunActive) &&
-                  !answerMode.active
+                  !answerMode.composerAnswers
                     ? duringRunSlot
                     : endpoint && (
                         <SendButton
                           ref={submitButtonRef}
                           control={methods.control}
+                          fileCount={submittableFileCount}
                           disabled={
                             filesLoading ||
                             disableInputs ||
+                            !codeWorkspace.canSubmit ||
                             isNotAppendable ||
-                            (isSubmitting && !answerMode.active)
+                            answerMode.composerLocked ||
+                            (isSubmitting && !answerMode.composerAnswers)
                           }
                         />
                       )}
                 </div>
               </div>
-              {TextToSpeech && automaticPlayback && <StreamAudio index={index} />}
+              {TextToSpeech && automaticPlayback && <AutoPlayAudio index={index} />}
             </div>
           </div>
         </div>
@@ -724,13 +871,21 @@ ChatForm.displayName = 'ChatForm';
  * to the memo'd ChatForm. This prevents ChatForm from re-rendering on every
  * streaming chunk — it only re-renders when the specific values it uses change.
  */
-function ChatFormWrapper({ index = 0, placeholder }: { index?: number; placeholder?: string }) {
+function ChatFormWrapper({
+  index = 0,
+  placeholder,
+  project,
+}: {
+  index?: number;
+  placeholder?: string;
+  project?: TChatProject;
+}) {
   const {
     files,
     setFiles,
     conversation,
+    setConversation,
     isSubmitting,
-    filesLoading,
     setFilesLoading,
     newConversation,
     handleStopGenerating,
@@ -755,6 +910,8 @@ function ChatFormWrapper({ index = 0, placeholder }: { index?: number; placehold
       conversation?.useResponsesApi,
       conversation?.model,
       conversation?.maxContextTokens,
+      conversation?.codeApprovalMode,
+      conversation?.codeWorkspaces,
       hasMessages,
     ],
   );
@@ -785,11 +942,12 @@ function ChatFormWrapper({ index = 0, placeholder }: { index?: number; placehold
     <ChatForm
       index={index}
       placeholder={placeholder}
+      project={project}
       files={files}
       setFiles={setFiles}
       conversation={stableConversation}
+      setConversation={setConversation}
       isSubmitting={isSubmitting}
-      filesLoading={filesLoading}
       setFilesLoading={setFilesLoading}
       newConversation={stableNewConversation}
       handleStopGenerating={stableHandleStop}
