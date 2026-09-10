@@ -101,6 +101,7 @@ export default function Root() {
                 </div>
               </div>
             </PromptGroupsProvider>
+            <KeyboardShortcutsProvider />
           </AgentsMapContext.Provider>
           {config?.interface?.termsOfService?.modalAcceptance === true && (
             <TermsAndConditionsModal

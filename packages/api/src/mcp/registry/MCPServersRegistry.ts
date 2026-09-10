@@ -252,7 +252,7 @@ export class MCPServersRegistry {
     let allowedDomains = this.allowedDomains;
     let allowedAddresses = this.allowedAddresses;
     // Apps are tenant/principal-scoped, so honor a per-request override of `mcpSettings.apps`,
-    // falling back to the YAML base when the resolver omits it, is absent, or fails.
+    // falling back to the YAML base when the resolver omits it or is absent.
     let appsEnabled = this.getAppsEnabled();
     if (this.allowlistResolver) {
       try {
@@ -264,9 +264,13 @@ export class MCPServersRegistry {
         }
       } catch (error) {
         logger.warn(
-          '[MCPServersRegistry] Allowlist resolver failed; falling back to YAML base allowlists',
+          '[MCPServersRegistry] Allowlist resolver failed; falling back to YAML base allowlists and disabling apps',
           error,
         );
+        // Allowlists fall back to the operator baseline, but apps fail CLOSED: a scope that disabled
+        // them would otherwise get inline app HTML persisted and rendered, and the gated endpoints
+        // cannot retract HTML that already reached the transcript.
+        appsEnabled = false;
       }
     }
     return {
@@ -317,6 +321,15 @@ export class MCPServersRegistry {
     if (base?.source === 'user') return base;
     if (candidate.inspectionFailed) return base ?? candidate;
     return base ? { ...candidate, source: base.source } : candidate;
+  }
+
+  /** Returns whether an effective config exactly matches the operator-owned base config. */
+  public async isAppServerConfig(
+    serverName: string,
+    effectiveConfig: t.ParsedServerConfig,
+  ): Promise<boolean> {
+    const baseConfig = await this.getServerConfig(serverName);
+    return baseConfig != null && deepEqual(baseConfig, effectiveConfig);
   }
 
   /**
@@ -512,7 +525,12 @@ export class MCPServersRegistry {
     return { serverName, config: updatedConfig };
   }
 
-  public async updateServer(
+  /**
+   * Inspects an update without mutating its backing repository. Callers that must
+   * coordinate an external fence with persistence can prepare first, fence, and
+   * then commit the returned config.
+   */
+  public async inspectServerUpdate(
     serverName: string,
     config: t.MCPOptions,
     storageLocation: 'CACHE' | 'DB',
@@ -553,9 +571,35 @@ export class MCPServersRegistry {
       }
       throw new MCPInspectionFailedError(serverName, error as Error);
     }
+    return parsedConfig;
+  }
+
+  /** Persists a previously inspected update without opening a second MCP connection. */
+  public async commitServerUpdate(
+    serverName: string,
+    parsedConfig: t.ParsedServerConfig,
+    storageLocation: 'CACHE' | 'DB',
+    userId?: string,
+  ): Promise<t.ParsedServerConfig> {
+    const configRepo = this.getConfigRepository(storageLocation);
     await configRepo.update(serverName, parsedConfig, userId);
     await this.invalidateServerReadCaches(serverName, userId);
     return parsedConfig;
+  }
+
+  public async updateServer(
+    serverName: string,
+    config: t.MCPOptions,
+    storageLocation: 'CACHE' | 'DB',
+    userId?: string,
+  ): Promise<t.ParsedServerConfig> {
+    const parsedConfig = await this.inspectServerUpdate(
+      serverName,
+      config,
+      storageLocation,
+      userId,
+    );
+    return await this.commitServerUpdate(serverName, parsedConfig, storageLocation, userId);
   }
 
   /**

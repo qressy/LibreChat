@@ -163,6 +163,26 @@ describe('MCPServersRegistry', () => {
     });
   });
 
+  describe('isAppServerConfig', () => {
+    it('rejects a same-name tenant override that inherited the YAML source tag', async () => {
+      const baseConfig = {
+        ...testParsedConfig,
+        source: 'yaml' as const,
+        url: 'https://base.example.com/mcp',
+        type: 'streamable-http' as const,
+      };
+      await registry['cacheConfigsRepo'].add('shared', baseConfig);
+
+      await expect(registry.isAppServerConfig('shared', baseConfig)).resolves.toBe(true);
+      await expect(
+        registry.isAppServerConfig('shared', {
+          ...baseConfig,
+          url: 'https://tenant.example.com/mcp',
+        }),
+      ).resolves.toBe(false);
+    });
+  });
+
   describe('addServer', () => {
     it('should pass user source to inspector before storing DB servers', async () => {
       const inspectSpy = jest.spyOn(MCPServerInspector, 'inspect');
@@ -272,15 +292,17 @@ describe('MCPServersRegistry', () => {
       });
     });
 
-    it('falls back to the YAML base allowlists when the resolver throws', async () => {
+    it('falls back to the YAML base allowlists but disables apps when the resolver throws', async () => {
       const resolver = jest.fn().mockRejectedValue(new Error('DB down'));
       const reg = createWith(['yaml.com'], null, resolver);
 
+      // Allowlists fall back to the operator baseline; apps fail closed because inline app HTML
+      // cannot be retracted once it reaches the transcript.
       await expect(reg.resolveAllowlists()).resolves.toEqual({
         allowedDomains: ['yaml.com'],
         allowedAddresses: null,
         useSSRFProtection: false,
-        appsEnabled: true,
+        appsEnabled: false,
       });
     });
 
@@ -385,6 +407,29 @@ describe('MCPServersRegistry', () => {
         if (config && 'command' in config) {
           expect(config.command).toBe('python');
         }
+      });
+
+      it('separates update inspection from persistence', async () => {
+        await registry.addServer('cache_server', testParsedConfig, 'CACHE');
+        const updatedConfig = { ...testParsedConfig, command: 'python' } as t.ParsedServerConfig;
+
+        const inspected = await registry.inspectServerUpdate(
+          'cache_server',
+          updatedConfig,
+          'CACHE',
+        );
+
+        const beforeCommit = await registry['cacheConfigsRepo'].get('cache_server');
+        expect(beforeCommit && 'command' in beforeCommit ? beforeCommit.command : undefined).toBe(
+          'node',
+        );
+
+        await registry.commitServerUpdate('cache_server', inspected, 'CACHE');
+
+        const afterCommit = await registry['cacheConfigsRepo'].get('cache_server');
+        expect(afterCommit && 'command' in afterCommit ? afterCommit.command : undefined).toBe(
+          'python',
+        );
       });
 
       it('should route removeServer to cache repository', async () => {

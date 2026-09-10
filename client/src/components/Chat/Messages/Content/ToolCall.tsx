@@ -1,27 +1,28 @@
-import React, { useRef, useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
 import { Button } from '@librechat/client';
 import { TriangleAlert } from 'lucide-react';
 import {
   Constants,
-  Tools,
   dataService,
   actionDelimiter,
   actionDomainSeparator,
+  splitToolCallName,
 } from 'librechat-data-provider';
 import type { TAttachment, UIResource } from 'librechat-data-provider';
-import { getMCPSandboxUrl, buildAppToolResult, isMcpAppResource } from '~/utils/mcpApps';
+import { useMCPIconMap, useAppBridge, useMCPAppFrame, useMCPServerNames } from '~/hooks/MCP';
 import { useLocalize, useProgress, useExpandCollapse } from '~/hooks';
+import { MCPAppFrame } from '~/components/MCPUIResource/MCPAppFrame';
 import { ToolIcon, getToolIconType, isError } from './ToolOutput';
-import { useMCPIconMap, useAppBridge } from '~/hooks/MCP';
-import { useIsMessagesViewReadOnly } from '~/Providers';
+import { selectToolCallUIResources } from '~/utils/mcpApps';
+import { useToolCallIntent } from './Parts/intent';
 import { AttachmentGroup } from './Parts';
 import ToolCallInfo from './ToolCallInfo';
 import ProgressText from './ProgressText';
 import { logger } from '~/utils';
 import store from '~/store';
 
-const SPINNER_TIMEOUT_MS = 10_000;
+const DEFAULT_APP_VIEW_HEIGHT = 320;
 
 const MCPAppView = React.memo(function MCPAppView({
   app,
@@ -31,65 +32,40 @@ const MCPAppView = React.memo(function MCPAppView({
   args: string | Record<string, unknown>;
 }) {
   const localize = useLocalize();
-  const readOnly = useIsMessagesViewReadOnly();
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState<number | undefined>(undefined);
-  const [loaded, setLoaded] = useState(false);
-  const [timedOut, setTimedOut] = useState(false);
-  const [tornDown, setTornDown] = useState(false);
-  const sandboxUrl = useMemo(() => getMCPSandboxUrl(), []);
+  const frame = useMCPAppFrame(app, {
+    defaultHeight: DEFAULT_APP_VIEW_HEIGHT,
+    toolArgs: args,
+  });
 
-  useEffect(() => {
-    if (loaded) return;
-    const timer = setTimeout(() => setTimedOut(true), SPINNER_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [loaded]);
+  useAppBridge({
+    iframeRef: frame.iframeRef,
+    resource: app,
+    toolArgs: frame.toolArgs,
+    toolResult: frame.toolResult,
+    active: frame.active,
+    onSizeChanged: frame.onSizeChanged,
+    onLoaded: frame.onLoaded,
+    onTeardown: frame.onTeardown,
+    onFailed: frame.onFailed,
+  });
 
-  const toolArgs = useMemo(() => {
-    try {
-      return typeof args === 'string' ? JSON.parse(args) : args;
-    } catch {
-      return undefined;
-    }
-  }, [args]);
-
-  const toolResult = useMemo(() => buildAppToolResult(app), [app]);
-
-  const handleSizeChanged = useCallback((params: { height?: number; width?: number }) => {
-    if (params.height && params.height > 0) {
-      setHeight(params.height);
-      setLoaded(true);
-    }
-  }, []);
-
-  useAppBridge(
-    iframeRef,
-    app,
-    toolArgs,
-    toolResult,
-    handleSizeChanged,
-    () => setLoaded(true),
-    () => setTornDown(true),
-  );
-
-  if (tornDown) {
+  if (frame.status === 'tornDown') {
     return null;
   }
 
-  const isAppBacked = isMcpAppResource(app);
   // Read-only views don't fetch app HTML, so a resourceUri-only app shows a placeholder.
-  if (isAppBacked && !app.text && readOnly) {
+  if (frame.kind === 'unavailable') {
     return (
       <div className="my-2 flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary px-4 py-3 text-sm text-text-secondary">
         {localize('com_ui_mcp_app_shared_unavailable')}
       </div>
     );
   }
-  if (!isAppBacked && app.text) {
+  if (frame.kind === 'static') {
     return (
       <div className="my-2">
         <iframe
-          srcDoc={app.text}
+          srcDoc={frame.inlineHtml}
           sandbox=""
           style={{ width: '100%', minHeight: '200px', border: 'none' }}
           title={app.uri}
@@ -99,44 +75,11 @@ const MCPAppView = React.memo(function MCPAppView({
   }
 
   return (
-    <div className="relative my-2" style={height ? { height } : { minHeight: 100 }}>
-      {!loaded && !timedOut && (
-        <div className="absolute inset-0 flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary px-4 py-3 text-sm text-text-secondary">
-          <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-            />
-          </svg>
-          {localize('com_ui_loading_interactive_view')}
-        </div>
-      )}
-      {timedOut && !loaded && (
-        <div className="absolute inset-0 flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary px-4 py-3 text-sm text-text-secondary">
-          {localize('com_ui_mcp_app_failed_to_load')}
-        </div>
-      )}
-      <iframe
-        ref={iframeRef}
-        data-sandbox-url={sandboxUrl}
-        sandbox="allow-scripts allow-forms"
-        style={{
-          width: '100%',
-          height: '100%',
-          border: 'none',
-          opacity: loaded ? 1 : 0,
-        }}
-        title={`MCP App: ${app.toolName ?? ''}`}
-      />
+    <div
+      className="relative my-2 overflow-hidden"
+      style={{ height: frame.height, minHeight: DEFAULT_APP_VIEW_HEIGHT }}
+    >
+      <MCPAppFrame frame={frame} resource={app} spinner />
     </div>
   );
 });
@@ -145,6 +88,7 @@ export default function ToolCall({
   initialProgress = 0.1,
   isLast = false,
   isSubmitting,
+  toolCallId,
   name,
   args: _args = '',
   output,
@@ -156,6 +100,7 @@ export default function ToolCall({
   initialProgress: number;
   isLast?: boolean;
   isSubmitting: boolean;
+  toolCallId?: string;
   name: string;
   args: string | Record<string, unknown>;
   output?: string | null;
@@ -187,14 +132,13 @@ export default function ToolCall({
     }
   }, [auth]);
 
+  const mcpServerNames = useMCPServerNames();
   const { function_name, domain, isMCPToolCall, mcpServerName } = useMemo(() => {
     if (typeof name !== 'string') {
       return { function_name: '', domain: null, isMCPToolCall: false, mcpServerName: '' };
     }
     if (name.includes(Constants.mcp_delimiter)) {
-      const parts = name.split(Constants.mcp_delimiter);
-      const func = parts[0];
-      const server = parts.slice(1).join(Constants.mcp_delimiter);
+      const [func, server = ''] = splitToolCallName(name, mcpServerNames);
       const displayName = func === 'oauth' ? server : func;
       return {
         function_name: displayName || '',
@@ -226,7 +170,7 @@ export default function ToolCall({
       isMCPToolCall: false,
       mcpServerName: '',
     };
-  }, [name, parsedAuthUrl]);
+  }, [name, parsedAuthUrl, mcpServerNames]);
 
   const toolIconType = useMemo(() => getToolIconType(name), [name]);
   const mcpIconMap = useMCPIconMap();
@@ -281,15 +225,7 @@ export default function ToolCall({
     [args, output],
   );
 
-  const mcpApps = useMemo(() => {
-    const uiResources: UIResource[] =
-      attachments
-        ?.filter((a) => a.type === Tools.ui_resources)
-        .flatMap((a) => (a[Tools.ui_resources] ?? []) as UIResource[]) ?? [];
-    return uiResources.filter(
-      (r) => isMcpAppResource(r) || (r.text && (r.mimeType ?? 'text/html').includes('html')),
-    );
-  }, [attachments]);
+  const mcpApps = useMemo(() => selectToolCallUIResources(attachments), [attachments]);
 
   const authDomain = useMemo(() => {
     return parsedAuthUrl?.hostname ?? '';
@@ -318,9 +254,17 @@ export default function ToolCall({
     return undefined;
   }, [isMCPToolCall, mcpServerName, domain, localize]);
 
+  /** Model-authored live label, streamed as the first args key (injected by
+   *  the `tool_intents` capability); persists as the settled label —
+   *  completion is a UI state, not a tense change. */
+  const intent = useToolCallIntent(_args);
+
   const getFinishedText = () => {
     if (cancelled) {
       return localize('com_ui_cancelled');
+    }
+    if (intent != null) {
+      return intent;
     }
     if (isMCPToolCall === true) {
       return localize('com_assistants_completed_function', { 0: function_name });
@@ -337,6 +281,10 @@ export default function ToolCall({
 
   return (
     <>
+      {/* The live region gets a STABLE in-progress value: the streaming
+          intent grows on every delta, and an atomic polite region would
+          re-announce the whole sentence each time. The settled intent is
+          announced once via getFinishedText. */}
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {(() => {
           if (progress < 1 && !showCancelled) {
@@ -347,14 +295,19 @@ export default function ToolCall({
           return getFinishedText();
         })()}
       </span>
-      <div className="relative my-1.5 flex h-5 shrink-0 items-center gap-2.5">
+      <div
+        className="relative my-1.5 flex h-5 shrink-0 items-center gap-2.5"
+        data-testid="tool-call"
+        data-tool-call-id={toolCallId}
+      >
         <ProgressText
           progress={progress}
           onClick={handleToggleInfo}
           inProgressText={
-            function_name
+            intent ??
+            (function_name
               ? localize('com_assistants_running_var', { 0: function_name })
-              : localize('com_assistants_running_action')
+              : localize('com_assistants_running_action'))
           }
           authText={
             !showCancelled && authDomain.length > 0 ? localize('com_ui_requires_auth') : undefined
@@ -374,7 +327,7 @@ export default function ToolCall({
           error={showCancelled}
         />
       </div>
-      <div style={expandStyle}>
+      <div style={expandStyle} data-tool-call-output-id={toolCallId}>
         <div className="overflow-hidden" ref={expandRef}>
           {hasInfo && (
             <div className="my-2 overflow-hidden rounded-lg border border-border-light bg-surface-secondary">
@@ -405,7 +358,9 @@ export default function ToolCall({
         <AttachmentGroup attachments={attachments} />
       )}
       {mcpApps.length > 0 &&
-        mcpApps.map((app) => <MCPAppView key={app.resourceId} app={app} args={_args} />)}
+        mcpApps.map((app) => (
+          <MCPAppView key={app.resourceId} app={app} args={app.toolArgs ?? _args} />
+        ))}
     </>
   );
 }

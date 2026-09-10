@@ -1,14 +1,8 @@
+import { RE2JS } from 're2js';
 import pick from 'lodash/pick';
 import { logger } from '@librechat/data-schemas';
 import { Permissions, PermissionTypes } from 'librechat-data-provider';
-import {
-  CallToolResultSchema,
-  ReadResourceResultSchema,
-  ListResourcesResultSchema,
-  ListResourceTemplatesResultSchema,
-  ErrorCode,
-  McpError,
-} from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type {
   ListResourcesResult,
   ListResourceTemplatesResult,
@@ -24,6 +18,7 @@ import type { RequestBody } from '~/types';
 import type * as t from './types';
 import {
   getMissingRuntimeBodyPlaceholderFields,
+  canUseAppConnection,
   hasCustomUserVars,
   isOAuthServer,
   isUserSourced,
@@ -31,6 +26,7 @@ import {
   requiresOAuthMachinery,
   requiresUserScopedConnection,
 } from './utils';
+import { getMCPAppToolsPublicationGeneration, getMCPToolsChangedGeneration } from './toolsChanged';
 import { mcpOptionsContainGraphTokenPlaceholder, preProcessGraphTokens } from '~/utils/graph';
 import { formatToolContent, resultHasRenderableUiResource } from './parsers';
 import { MCPServersInitializer } from './registry/MCPServersInitializer';
@@ -41,8 +37,15 @@ import { MCPServersRegistry } from './registry/MCPServersRegistry';
 import { UserConnectionManager } from './UserConnectionManager';
 import { ConnectionsRepository } from './ConnectionsRepository';
 import { MCPConnectionFactory } from './MCPConnectionFactory';
+import { processMCPEnv, isPluginSourced } from '~/utils/env';
 import { MCPConnection } from './connection';
-import { processMCPEnv } from '~/utils/env';
+
+/** One RFC 6570 varspec: its name plus the single modifier it may carry. */
+interface UriTemplateVarSpec {
+  name: string;
+  prefix?: number;
+  explode: boolean;
+}
 
 function createOboToolCallErrorMessage(
   logPrefix: string,
@@ -84,11 +87,18 @@ export class MCPManager extends UserConnectionManager {
    */
   private readonly advertisedResourceCache = new Map<
     string,
-    { uris: Set<string>; templates: RegExp[] }
+    { uris: Set<string>; templates: RE2JS[]; complete: boolean }
   >();
 
   private readonly advertisedResourceConnStamp = new Map<string, string>();
   private static readonly RESOURCE_LIST_MAX_PAGES = 20;
+  private static readonly RESOURCE_LIST_MAX_ENTRIES = 5000;
+  /** RFC 6570 §2.2 reserves these expression operators; a template using one is not matchable here. */
+  private static readonly RESERVED_TEMPLATE_OPERATOR = /^[=,!@|]/;
+  /** RE2 rejects a repeat count above this, so a larger RFC 6570 prefix cannot be compiled as one. */
+  private static readonly MAX_REPEAT_COUNT = 1000;
+  /** Declared-variable ceiling for the expansions compiled as an ordered chain of optional units. */
+  private static readonly MAX_ORDERED_TEMPLATE_VARS = 8;
 
   /** Creates and initializes the singleton MCPManager instance */
   public static async createInstance(configs: t.MCPServers): Promise<MCPManager> {
@@ -165,8 +175,12 @@ export class MCPManager extends UserConnectionManager {
     try {
       const existingAppConnection = await this.appConnections?.get(serverName);
       if (existingAppConnection && (await existingAppConnection.isConnected())) {
-        const tools = await existingAppConnection.fetchTools();
-        return { tools, oauthRequired: false, oauthUrl: null };
+        const snapshot = await existingAppConnection.fetchOrderedToolsSnapshot();
+        return {
+          tools: snapshot.complete ? snapshot.tools : null,
+          oauthRequired: false,
+          oauthUrl: null,
+        };
       }
     } catch {
       logger.debug(`${logPrefix} [Discovery] App connection not available, trying discovery mode`);
@@ -224,9 +238,9 @@ export class MCPManager extends UserConnectionManager {
     ): Promise<t.ToolDiscoveryResult> => {
       if (result.connection) {
         try {
-          await result.connection.disconnect();
+          await result.connection.dispose();
         } catch (error) {
-          logger.warn(`${logPrefix} [Discovery] Failed to disconnect discovery connection`, error);
+          logger.warn(`${logPrefix} [Discovery] Failed to dispose discovery connection`, error);
         }
       }
       return {
@@ -275,41 +289,127 @@ export class MCPManager extends UserConnectionManager {
     const toolFunctions: t.LCAvailableTools = {};
     const configs = await MCPServersRegistry.getInstance().getAllServerConfigs();
     for (const config of Object.values(configs)) {
-      if (config.toolFunctions != null) {
+      if (canUseAppConnection(config) && config.toolFunctions != null) {
         Object.assign(toolFunctions, config.toolFunctions);
       }
     }
     return toolFunctions;
   }
 
-  /** Returns all available tool functions from all connections available to user */
-  public async getServerToolFunctions(
+  /** Opens eligible app-shared sessions after the inspected startup catalog has been cached. */
+  public async connectAppServers(): Promise<void> {
+    try {
+      const configs = await MCPServersRegistry.getInstance().getAllServerConfigs();
+      const serverNames = Object.entries(configs)
+        .filter(([, config]) => canUseAppConnection(config))
+        .map(([serverName]) => serverName);
+      const connections = await this.appConnections?.getMany(serverNames, {
+        continueOnError: true,
+        refreshTools: false,
+      });
+      if (!connections) {
+        return;
+      }
+      await Promise.all(
+        Array.from(connections.values(), (connection) => connection.refreshToolList()),
+      );
+    } catch (error) {
+      logger.warn('[MCP] Failed to establish one or more app connections after inspection', error);
+    }
+  }
+
+  /** Closes app-shared MCP sessions during graceful process shutdown. */
+  public async disconnectAppServers(): Promise<void> {
+    await Promise.all(this.appConnections?.disconnectAll() ?? []);
+  }
+
+  /** Returns tool functions with the generation bound to their originating user connection. */
+  public async getServerToolFunctionsSnapshot(
     userId: string,
     serverName: string,
-  ): Promise<t.LCAvailableTools | null> {
+    serverConfig?: t.ParsedServerConfig,
+  ): Promise<{
+    tools: t.LCAvailableTools | null;
+    publicationGeneration?: string;
+  }> {
     try {
-      //try get the appConnection (if the config is not in the app level anymore any existing connection will disconnect and get will return null)
-      const existingAppConnection = await this.appConnections?.get(serverName);
-      if (existingAppConnection) {
-        return MCPServerInspector.getToolFunctions(serverName, existingAppConnection);
+      const registry = MCPServersRegistry.getInstance();
+      const effectiveConfig = serverConfig ?? (await registry.getServerConfig(serverName, userId));
+      const useAppConnection =
+        effectiveConfig != null &&
+        canUseAppConnection(effectiveConfig) &&
+        (await registry.isAppServerConfig(serverName, effectiveConfig));
+      const existingAppConnection = useAppConnection
+        ? await this.appConnections?.get(serverName)
+        : null;
+      if (existingAppConnection != null) {
+        return {
+          tools: await MCPServerInspector.getToolFunctions(serverName, existingAppConnection),
+        };
       }
 
       const userConnections = this.getUserConnections(userId);
       if (!userConnections || userConnections.size === 0) {
-        return null;
+        return { tools: null };
       }
       if (!userConnections.has(serverName)) {
-        return null;
+        return { tools: null };
       }
 
-      return MCPServerInspector.getToolFunctions(serverName, userConnections.get(serverName)!);
+      const connection = userConnections.get(serverName)!;
+      if (effectiveConfig == null) {
+        await this.disconnectUserConnection(userId, serverName);
+        return { tools: null };
+      }
+      const connectionConfigGeneration = this.getToolConfigGeneration(connection);
+      const effectiveConfigGeneration = getMCPAppToolsPublicationGeneration(effectiveConfig);
+      if (
+        connectionConfigGeneration != null &&
+        effectiveConfigGeneration != null &&
+        connectionConfigGeneration !== effectiveConfigGeneration
+      ) {
+        await this.disconnectUserConnection(userId, serverName);
+        return { tools: null };
+      }
+      const publicationGeneration = this.getToolPublicationGeneration(connection);
+      const currentGeneration = await getMCPToolsChangedGeneration({ userId, serverName });
+      if (
+        publicationGeneration != null &&
+        currentGeneration != null &&
+        publicationGeneration !== currentGeneration
+      ) {
+        await this.disconnectUserConnection(userId, serverName);
+        return { tools: null };
+      }
+      const tools = await MCPServerInspector.getToolFunctions(serverName, connection);
+      const generationAfterFetch = await getMCPToolsChangedGeneration({ userId, serverName });
+      if (
+        publicationGeneration != null &&
+        generationAfterFetch != null &&
+        publicationGeneration !== generationAfterFetch
+      ) {
+        await this.disconnectUserConnection(userId, serverName);
+        return { tools: null };
+      }
+      return {
+        tools,
+        publicationGeneration,
+      };
     } catch (error) {
       logger.warn(
         `[getServerToolFunctions] Error getting tool functions for server ${serverName}`,
         error,
       );
-      return null;
+      return { tools: null };
     }
+  }
+
+  /** Returns all available tool functions from all connections available to user. */
+  public async getServerToolFunctions(
+    userId: string,
+    serverName: string,
+  ): Promise<t.LCAvailableTools | null> {
+    return (await this.getServerToolFunctionsSnapshot(userId, serverName)).tools;
   }
 
   /**
@@ -416,6 +516,21 @@ Please follow these instructions when using tools from the respective MCP server
     return `${connection.createdAt}:${connection.resourceListVersion}`;
   }
 
+  /**
+   * Scope for the tool-metadata and resource-authorization caches. An app-level connection is shared
+   * by every user, and nothing clears its entries (`removeUserConnection` only runs for user-scoped
+   * connections), so keying it per user would retain one entry set per user for the process lifetime.
+   * User-scoped connections (OAuth/OBO/customUserVars/runtime placeholders) are distinct connections
+   * that can expose different tools and different visibility per user, so those keep their per-user
+   * key. Decided by connection identity rather than by re-deriving the config's connection scope.
+   */
+  private cacheScope(serverName: string, connection: MCPConnection, userId?: string): string {
+    if (this.appConnections?.getPooledConnection(serverName) === connection) {
+      return `${serverName}:`;
+    }
+    return `${serverName}:${userId ?? ''}`;
+  }
+
   private isToolCacheFresh(cacheKey: string, connection: MCPConnection): boolean {
     return (
       this.knownToolNamesCache.has(cacheKey) &&
@@ -435,8 +550,9 @@ Please follow these instructions when using tools from the respective MCP server
     >;
     appHidden: Set<string>;
     knownNames: Set<string>;
+    complete: boolean;
   }> {
-    const tools = await connection.fetchTools();
+    const { tools, complete } = await connection.fetchToolsSnapshot();
     const serverMap = new Map<
       string,
       { uri: string; csp?: UIResource['csp']; permissions?: UIResource['permissions'] }
@@ -462,15 +578,19 @@ Please follow these instructions when using tools from the respective MCP server
         logger.warn(`[MCP] Ignoring invalid UI resource metadata on tool "${tool.name}":`, error);
       }
     }
-    return { serverMap, appHidden, knownNames };
+    return { serverMap, appHidden, knownNames, complete };
   }
 
   private async populateToolCaches(connection: MCPConnection, cacheKey: string): Promise<void> {
-    const { serverMap, appHidden, knownNames } = await this.buildToolCaches(connection);
-    // fetchTools returns [] both for genuinely tool-less servers and for a transient tools/list
-    // failure. Caching an empty list as authoritative would disable MCP Apps until reconnect, so
-    // leave the cache unpopulated when empty and re-fetch on the next call.
-    if (knownNames.size === 0) {
+    const { serverMap, appHidden, knownNames, complete } = await this.buildToolCaches(connection);
+    // These caches authorize app tool calls and tool-declared UI resource reads, so a page missing
+    // from a partial `tools/list` is a false denial rather than a missing feature. An incomplete
+    // snapshot (and an empty one, which a transient failure and a genuinely tool-less server both
+    // produce) is left unpublished so the next call re-fetches instead of denying until reconnect.
+    // A snapshot truncated by a tools/list budget cap reports complete and is cached, for the same
+    // reason the advertisement snapshot caches its cap-truncated form: it is reproducible, so
+    // re-fetching it on every call pays the full listing cost without widening the result.
+    if (!complete || knownNames.size === 0) {
       return;
     }
     this.resourceUriCache.set(cacheKey, serverMap);
@@ -494,7 +614,7 @@ Please follow these instructions when using tools from the respective MCP server
       const { serverMap } = await this.buildToolCaches(connection);
       return serverMap.get(toolName);
     }
-    const cacheKey = `${serverName}:${userId ?? ''}`;
+    const cacheKey = this.cacheScope(serverName, connection, userId);
     if (!this.isToolCacheFresh(cacheKey, connection)) {
       await this.populateToolCaches(connection, cacheKey);
     }
@@ -556,8 +676,6 @@ Please follow these instructions when using tools from the respective MCP server
     const logPrefix = userId ? `[MCP][User: ${userId}][${serverName}]` : `[MCP][${serverName}]`;
 
     try {
-      if (userId && user) this.updateUserLastActivity(userId);
-
       connection = await this.getConnection({
         serverName,
         user,
@@ -592,17 +710,22 @@ Please follow these instructions when using tools from the respective MCP server
         );
       }
       const isDbSourced = isUserSourced(rawConfig);
-      disconnectAfterCall =
-        !!userId && requiresEphemeralUserConnection(rawConfig) && !requestScopedConnections;
+      const ephemeralConnection = !!userId && requiresEphemeralUserConnection(rawConfig);
+      disconnectAfterCall = ephemeralConnection && !requestScopedConnections;
 
-      /** Pre-process Graph token placeholders (async) before the synchronous processMCPEnv pass */
-      const graphProcessedConfig = isDbSourced
-        ? (rawConfig as t.MCPOptions)
-        : await preProcessGraphTokens(rawConfig as t.MCPOptions, {
-            user,
-            graphTokenResolver,
-            scopes: process.env.GRAPH_API_SCOPES,
-          });
+      /**
+       * Pre-process Graph token placeholders (async) before the synchronous processMCPEnv pass.
+       * Plugin-sourced configs are excluded for the same reason processMCPEnv excludes them:
+       * a placeholder a plugin authored must never resolve against the user's Graph token.
+       */
+      const graphProcessedConfig =
+        isDbSourced || isPluginSourced(rawConfig)
+          ? (rawConfig as t.MCPOptions)
+          : await preProcessGraphTokens(rawConfig as t.MCPOptions, {
+              user,
+              graphTokenResolver,
+              scopes: process.env.GRAPH_API_SCOPES,
+            });
       const currentOptions = processMCPEnv({
         user,
         body: requestBody,
@@ -694,7 +817,9 @@ Please follow these instructions when using tools from the respective MCP server
 
       connection.setRequestHeaders(resolvedHeaders);
 
-      const mcpCallStart = Date.now();
+      // Deliberately `request` rather than `client.callTool`: the typed wrapper also enforces the
+      // tool's `outputSchema` and rejects `execution.taskSupport: required` tools, which would turn
+      // a server-side schema mismatch into a host-side tool failure.
       const result = await connection.client.request(
         {
           method: 'tools/call',
@@ -710,9 +835,10 @@ Please follow these instructions when using tools from the respective MCP server
           ...options,
         },
       );
-      logger.debug(`${logPrefix}[${toolName}] tool call completed in ${Date.now() - mcpCallStart}ms`);
-      if (userId) {
-        this.updateUserLastActivity(userId);
+      const hasPersistentUserConnections =
+        !!userId && (this.userConnections.get(userId)?.size ?? 0) > 0;
+      if (!ephemeralConnection && hasPersistentUserConnections) {
+        await this.updateUserLastActivity(userId);
       }
       this.checkIdleConnections();
       // The app routes (getAppConnection) reject OBO, Graph-token, and runtime body-placeholder
@@ -819,11 +945,16 @@ Please follow these instructions when using tools from the respective MCP server
     tokenMethods?: TokenMethods;
   }): Promise<MCPConnection> {
     const logPrefix = `[MCP][User: ${userId}][${serverName}]`;
-    const rawConfig = await MCPServersRegistry.getInstance().getServerConfig(
-      serverName,
+    // Resolved through the role-aware path (as discovery does) rather than the single-server lookup,
+    // whose ACL check is user-only: a server or agent shared to the user's role would otherwise look
+    // inaccessible here and the app's follow-up reads and tool calls would be rejected. Precedence
+    // matches getServerConfig by contract.
+    const allConfigs = await MCPServersRegistry.getInstance().getAllServerConfigs(
       userId,
       configServers,
+      user?.role,
     );
+    const rawConfig = allConfigs[serverName];
     const isDbSourced = rawConfig ? isUserSourced(rawConfig) : false;
     if (rawConfig) {
       if (rawConfig.obo) {
@@ -914,25 +1045,56 @@ Please follow these instructions when using tools from the respective MCP server
       );
     }
 
-    await this.assertResourceReadable(connection, `${serverName}:${userId}`, uri, logPrefix);
-
-    const result = await connection.client.request(
-      {
-        method: 'resources/read',
-        params: { uri },
-      },
-      ReadResourceResultSchema,
-      { timeout: connection.timeout },
+    await this.assertResourceReadable(
+      connection,
+      this.cacheScope(serverName, connection, userId),
+      uri,
+      logPrefix,
     );
 
-    return result;
+    return connection.client.readResource({ uri }, { timeout: connection.timeout });
   }
 
   /**
-   * Authorizes an app-driven `resources/read`. App UI resources (`ui://`) are always allowed;
-   * any other URI must be one the server actually advertises (an exact `resources/list` entry or
-   * a `resources/templates/list` match), so a sandboxed app cannot exfiltrate unrelated resources
-   * the host connection can otherwise reach. Fails closed when the advertised set is unavailable.
+   * True when any tool on this connection declares `uri` as its UI resource. Connection-wide rather
+   * than per-tool because apps.mdx scopes an app's privileges to the same server connection, and
+   * needed in addition to the advertised set because servers MAY omit UI-only resources from
+   * `resources/list`. A `tools/list` failure denies (and stays retryable: `populateToolCaches` never
+   * caches an incomplete or empty tool set, so the next read re-fetches).
+   */
+  private async isToolDeclaredUiResource(
+    connection: MCPConnection,
+    cacheKey: string,
+    uri: string,
+  ): Promise<boolean> {
+    try {
+      if (!this.isToolCacheFresh(cacheKey, connection)) {
+        await this.populateToolCaches(connection, cacheKey);
+      }
+    } catch (error) {
+      logger.warn(
+        `[MCP][${cacheKey}] Could not list tools to authorize UI resource "${uri}"; denying.`,
+        error,
+      );
+      return false;
+    }
+    const declared = this.resourceUriCache.get(cacheKey);
+    if (!declared) {
+      return false;
+    }
+    for (const meta of declared.values()) {
+      if (meta.uri === uri) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Authorizes an app-driven `resources/read`. The URI must either be declared as a tool's UI
+   * resource on this connection or be one the server actually advertises (an exact `resources/list`
+   * entry or a `resources/templates/list` match), so a sandboxed app cannot exfiltrate unrelated
+   * resources the host connection can otherwise reach. Fails closed when neither is available.
    */
   private async assertResourceReadable(
     connection: MCPConnection,
@@ -940,10 +1102,16 @@ Please follow these instructions when using tools from the respective MCP server
     uri: string,
     logPrefix: string,
   ): Promise<void> {
-    if (uri.startsWith('ui://')) {
+    // Check order is load-bearing: tool-declared, then the exact advertised URI, then the
+    // canonicalized template match. Canonicalization must stay below the exact check, or an
+    // advertised URI carrying a bare `%` (`db://100%`) fails to decode and becomes unreadable.
+    if (
+      uri.startsWith('ui://') &&
+      (await this.isToolDeclaredUiResource(connection, cacheKey, uri))
+    ) {
       return;
     }
-    let advertised: { uris: Set<string>; templates: RegExp[] };
+    let advertised: { uris: Set<string>; templates: RE2JS[]; complete: boolean };
     try {
       advertised = await this.getAdvertisedResources(connection, cacheKey);
     } catch (error) {
@@ -964,21 +1132,68 @@ Please follow these instructions when using tools from the respective MCP server
     const canonicalUri = MCPManager.canonicalizeUri(uri);
     if (
       canonicalUri != null &&
-      advertised.templates.some((pattern) => pattern.test(canonicalUri))
+      advertised.templates.some((pattern) => pattern.matches(canonicalUri))
     ) {
       return;
     }
+    // A truncated snapshot must not deny with a claim the server never made.
+    const truncated = advertised.complete
+      ? ''
+      : ' The advertised resource list could not be fully enumerated.';
     throw new McpError(
       ErrorCode.InvalidRequest,
-      `${logPrefix} Resource "${uri}" is not advertised by the server and cannot be read by an app.`,
+      `${logPrefix} Resource "${uri}" is not advertised by the server and cannot be read by an app.${truncated}`,
     );
   }
 
-  /** Snapshots (and caches per connection) the resource URIs and URI templates a server advertises. */
+  /**
+   * Walks one cursor-paginated advertisement list. Reports `truncated` when the snapshot it produced
+   * stopped at the page or entry cap, so a denial can report that rather than imply the server does
+   * not advertise the resource, and a request failure propagates so it can be told apart from a cap.
+   * An empty-string `nextCursor` ends pagination: treating it as a next page re-requests page one
+   * until the cap and truncates the snapshot instead.
+   */
+  private static async collectAdvertisedPages<T>(
+    fetchPage: (cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>,
+    collect: (item: T) => void,
+    count: () => number,
+  ): Promise<'complete' | 'truncated'> {
+    let cursor: string | undefined;
+    for (let page = 0; page < MCPManager.RESOURCE_LIST_MAX_PAGES; page++) {
+      const { items, nextCursor } = await fetchPage(cursor);
+      for (const item of items) {
+        if (count() >= MCPManager.RESOURCE_LIST_MAX_ENTRIES) {
+          return 'truncated';
+        }
+        collect(item);
+      }
+      if (!nextCursor) {
+        return 'complete';
+      }
+      cursor = nextCursor;
+    }
+    return 'truncated';
+  }
+
+  /**
+   * A server that does not implement one of the advertisement methods answers the same way every
+   * time, so its empty list is its actual advertisement rather than a failure to enumerate.
+   */
+  private static isUnimplementedMethod(error: unknown): boolean {
+    return error instanceof McpError && error.code === ErrorCode.MethodNotFound;
+  }
+
+  /**
+   * Snapshots the resource URIs and URI templates a server advertises. Caching is deliberate per
+   * outcome: a fully walked or cap-truncated snapshot is cached (both are reproducible, and
+   * re-walking up to `RESOURCE_LIST_MAX_ENTRIES` entries on every app read is the cost this cache
+   * exists to avoid), while a request failure is not cached at all, so a transient `resources/list`
+   * error denies only the read that saw it instead of every read for the connection's lifetime.
+   */
   private async getAdvertisedResources(
     connection: MCPConnection,
     cacheKey: string,
-  ): Promise<{ uris: Set<string>; templates: RegExp[] }> {
+  ): Promise<{ uris: Set<string>; templates: RE2JS[]; complete: boolean }> {
     const cached = this.advertisedResourceCache.get(cacheKey);
     if (
       cached &&
@@ -988,65 +1203,73 @@ Please follow these instructions when using tools from the respective MCP server
     }
 
     const uris = new Set<string>();
-    let cursor: string | undefined;
-    // A template-only server may not implement resources/list; treat its failure as an empty
-    // concrete list so advertised templates below are still collected and can authorize reads.
-    try {
-      for (let page = 0; page < MCPManager.RESOURCE_LIST_MAX_PAGES; page++) {
-        const result: ListResourcesResult = await connection.client.request(
-          { method: 'resources/list', params: cursor != null ? { cursor } : {} },
-          ListResourcesResultSchema,
-          { timeout: connection.timeout },
+    const templates: RE2JS[] = [];
+    let truncated = false;
+    let failed = false;
+    // The handshake capabilities say whether the server has resources at all, so a server declaring
+    // none advertises an empty (and complete) set instead of being probed. Capabilities are unknown
+    // only before initialize resolves, where asking is harmless: a failed call still denies.
+    const capabilities = connection.client.getServerCapabilities?.();
+    if (capabilities == null || capabilities.resources != null) {
+      // A template-only server may not implement resources/list; treat that as an empty concrete
+      // list so advertised templates below are still collected and can authorize reads.
+      try {
+        const outcome = await MCPManager.collectAdvertisedPages(
+          async (cursor) => {
+            const result: ListResourcesResult = await connection.client.listResources(
+              cursor != null ? { cursor } : {},
+              { timeout: connection.timeout },
+            );
+            return { items: result.resources, nextCursor: result.nextCursor };
+          },
+          (resource) => uris.add(resource.uri),
+          () => uris.size,
         );
-        for (const resource of result.resources) {
-          uris.add(resource.uri);
-        }
-        if (result.nextCursor == null) {
-          break;
-        }
-        cursor = result.nextCursor;
+        truncated = outcome === 'truncated';
+      } catch (error) {
+        failed = !MCPManager.isUnimplementedMethod(error);
+        logger.debug(`[MCP][${cacheKey}] resources/list unavailable; using templates only.`, error);
       }
-    } catch (error) {
-      logger.debug(`[MCP][${cacheKey}] resources/list unavailable; using templates only.`, error);
+
+      try {
+        const outcome = await MCPManager.collectAdvertisedPages(
+          async (cursor) => {
+            const result: ListResourceTemplatesResult =
+              await connection.client.listResourceTemplates(cursor != null ? { cursor } : {}, {
+                timeout: connection.timeout,
+              });
+            return { items: result.resourceTemplates, nextCursor: result.nextCursor };
+          },
+          (template) => {
+            const pattern = MCPManager.compileUriTemplate(template.uriTemplate);
+            if (pattern) {
+              templates.push(pattern);
+            }
+          },
+          () => templates.length,
+        );
+        truncated = truncated || outcome === 'truncated';
+      } catch (error) {
+        failed = failed || !MCPManager.isUnimplementedMethod(error);
+        logger.debug(
+          `[MCP][${cacheKey}] resources/templates/list unavailable; skipping templates.`,
+          error,
+        );
+      }
     }
 
-    const templates: RegExp[] = [];
-    try {
-      cursor = undefined;
-      for (let page = 0; page < MCPManager.RESOURCE_LIST_MAX_PAGES; page++) {
-        const result: ListResourceTemplatesResult = await connection.client.request(
-          { method: 'resources/templates/list', params: cursor != null ? { cursor } : {} },
-          ListResourceTemplatesResultSchema,
-          { timeout: connection.timeout },
-        );
-        for (const template of result.resourceTemplates) {
-          // Compile templates in the same decoded space the requested URI is canonicalized into,
-          // so matching is encoding-agnostic; fall back to the raw template if it is not valid
-          // percent-encoding.
-          let templateStr = template.uriTemplate;
-          try {
-            templateStr = decodeURIComponent(templateStr);
-          } catch {
-            /* keep raw template */
-          }
-          const pattern = MCPManager.uriTemplateToRegExp(templateStr);
-          if (pattern) {
-            templates.push(pattern);
-          }
-        }
-        if (result.nextCursor == null) {
-          break;
-        }
-        cursor = result.nextCursor;
-      }
-    } catch (error) {
-      logger.debug(
-        `[MCP][${cacheKey}] resources/templates/list unavailable; skipping templates.`,
-        error,
+    const entry = { uris, templates, complete: !truncated && !failed };
+    if (failed) {
+      logger.warn(
+        `[MCP][${cacheKey}] Advertised resources could not be enumerated; denying this read and re-listing on the next one.`,
+      );
+      return entry;
+    }
+    if (truncated) {
+      logger.warn(
+        `[MCP][${cacheKey}] Advertised resource snapshot is incomplete; resources outside the snapshot will be denied for this connection.`,
       );
     }
-
-    const entry = { uris, templates };
     this.advertisedResourceCache.set(cacheKey, entry);
     this.advertisedResourceConnStamp.set(cacheKey, this.resourceConnStamp(connection));
     return entry;
@@ -1087,8 +1310,18 @@ Please follow these instructions when using tools from the respective MCP server
   /**
    * Converts an RFC 6570 resource URI template into an anchored matcher. Simple expansions match a
    * single path segment; reserved/operator expansions (`{+x}`, `{#x}`, `{/x}`, ...) may span `/`.
+   *
+   * Compiled with RE2 rather than the native engine because both halves are attacker-supplied (a
+   * server advertises the template, the sandboxed app supplies the URI) and adjacent expressions
+   * produce adjacent unbounded classes by construction, so no character-class tightening can make
+   * `{a}{b}{c}...` safe on a backtracking engine (measured: tens of seconds on one request).
+   *
+   * The SDK's `UriTemplate.match()` is deliberately not used in its place: it admits `&` inside a
+   * simple value (so `?q={q}` authorizes `?q=foo&admin=true`), maps `+`/`#` to an unbounded class,
+   * implements no `;` operator, and builds its `RegExp` inside `match()` where no linear-time engine
+   * can be substituted.
    */
-  private static uriTemplateToRegExp(template: string): RegExp | null {
+  private static compileUriTemplate(template: string): RE2JS | null {
     try {
       let pattern = '';
       for (let i = 0; i < template.length; ) {
@@ -1107,17 +1340,60 @@ Please follow these instructions when using tools from the respective MCP server
         // because this regex is the allow-list for app-driven resources/read, a query/fragment
         // template must not authorize unrelated reads or path traversal.
         const expr = template.slice(i + 1, end);
+        // Reserved operators have no defined expansion, so nothing they could authorize is knowable.
+        if (MCPManager.RESERVED_TEMPLATE_OPERATOR.test(expr)) {
+          return null;
+        }
         const op = expr[0] ?? '';
         // Variable names declared in this expansion (operator + `:prefix`/`*explode` modifiers
         // stripped), used to constrain query expansions to their declared keys rather than an
         // open query string.
-        const keys = expr
+        const varSpecs = expr
           .replace(/^[+#./;?&]/, '')
           .split(',')
-          .map((name) => name.split(/[:*]/)[0].trim())
+          .map((spec) => spec.trim())
+          .filter(Boolean);
+        const keys = varSpecs
+          .map((spec) => spec.split(/[:*]/)[0].trim())
           .filter(Boolean)
           .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
           .join('|');
+        // No declared name means no value this expression could recover, so `{?}`, `{&}`, `{}` and
+        // `{*}` authorize nothing rather than falling back to an open query string.
+        if (!keys) {
+          return null;
+        }
+        // Query expansions are bounded per declared variable rather than as an open run of declared
+        // keys, so they route here ahead of the prefix branch: a `:max-length` on a query variable
+        // is only a tighter value bound within the same bounded sequence.
+        if (op === '?' || op === '&') {
+          const queryExpansion = MCPManager.compileQueryExpansion(op, varSpecs);
+          if (queryExpansion == null) {
+            return null;
+          }
+          pattern += queryExpansion;
+          i = end + 1;
+          continue;
+        }
+        if (varSpecs.some((spec) => spec.includes(':'))) {
+          const prefixed = MCPManager.compilePrefixedExpansion(op, varSpecs);
+          if (prefixed == null) {
+            return null;
+          }
+          pattern += prefixed;
+          i = end + 1;
+          continue;
+        }
+        // RFC 6570 3.2.5/3.2.6: each defined variable contributes exactly one prefixed component,
+        // so a non-exploded expression can never expand past its declared variable count.
+        const exploded = varSpecs.some((spec) => spec.endsWith('*'));
+        const quantified = exploded || varSpecs.length > 1;
+        const bounded = (unit: string) => {
+          if (exploded) {
+            return `(?:${unit})+`;
+          }
+          return varSpecs.length > 1 ? `(?:${unit}){1,${varSpecs.length}}` : unit;
+        };
         switch (op) {
           case '+': // reserved expansion: may legitimately include "/"
             pattern += '[^?#]+';
@@ -1126,19 +1402,15 @@ Please follow these instructions when using tools from the respective MCP server
             pattern += '#[^\\s]*';
             break;
           case '/': // path segments
-            pattern += '(?:/[^/?#]+)+';
+            pattern += bounded('/[^/?#]+');
             break;
-          case '.': // label(s)
-            pattern += '(?:\\.[^/?#]+)+';
+          case '.': // label(s): the repeated unit must exclude its own delimiter, or one repetition
+            // swallows the rest; a single unquantified label keeps the wider class.
+            pattern += quantified ? bounded('\\.[^/?#.]+') : '\\.[^/?#]+';
             break;
-          case ';': // path-style params
-            pattern += '(?:;[^/?#]+)+';
-            break;
-          case '?': // query: only the declared parameter names, in any order
-            pattern += keys ? `\\?(?:${keys})=[^#&]*(?:&(?:${keys})=[^#&]*)*` : '\\?[^#]*';
-            break;
-          case '&': // query continuation: only the declared parameter names
-            pattern += keys ? `(?:&(?:${keys})=[^#&]*)+` : '&[^#]*';
+          case ';': // path-style params: pinned to the declared names and bounded by their count,
+            // with a value class excluding `;` so one value cannot swallow `;admin=true`.
+            pattern += bounded(`;(?:${keys})(?:=[^/?#;&]*)?`);
             break;
           default: // simple expansion: a single value. RFC 6570 percent-encodes reserved chars,
             // so a real value never contains a raw `&` or `=`; excluding them stops a query value
@@ -1147,9 +1419,176 @@ Please follow these instructions when using tools from the respective MCP server
         }
         i = end + 1;
       }
-      return new RegExp(`^${pattern}$`);
+      // A pattern RE2 refuses to compile (an oversized varSpec list, for instance) throws
+      // RE2JSSyntaxException here and fails closed as a null matcher.
+      return RE2JS.compile(`^${pattern}$`);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * RFC 6570 §2.4: a varspec carries at most one modifier, `:max-length` (1 to 9999) or `*`. Anything
+   * else (`{id:3*}`, `{id:0}`, `{id:abc}`) is not a valid varspec, so no expansion of it is knowable.
+   */
+  private static parseVarSpec(spec: string): UriTemplateVarSpec | null {
+    const explode = spec.endsWith('*');
+    const body = explode ? spec.slice(0, -1) : spec;
+    const colon = body.indexOf(':');
+    if (colon === -1) {
+      const name = body.trim();
+      return name ? { name, explode } : null;
+    }
+    if (explode) {
+      return null;
+    }
+    const name = body.slice(0, colon).trim();
+    const maxLength = body.slice(colon + 1).trim();
+    if (!name || !/^[1-9][0-9]{0,3}$/.test(maxLength)) {
+      return null;
+    }
+    return { name, prefix: Number(maxLength), explode };
+  }
+
+  /**
+   * Parses every varspec of one expansion, rejecting the whole expression when any is invalid. The
+   * count is capped because both compiled forms chain one optional unit per variable, which is
+   * quadratic in the declared count: a pathological varspec list authorizes nothing instead of being
+   * handed to RE2 as a compile-time cost on every read.
+   */
+  private static parseVarSpecs(varSpecs: string[]): UriTemplateVarSpec[] | null {
+    if (varSpecs.length > MCPManager.MAX_ORDERED_TEMPLATE_VARS) {
+      return null;
+    }
+    const specs: UriTemplateVarSpec[] = [];
+    for (const varSpec of varSpecs) {
+      const parsed = MCPManager.parseVarSpec(varSpec);
+      if (parsed == null) {
+        return null;
+      }
+      specs.push(parsed);
+    }
+    return specs;
+  }
+
+  /**
+   * RFC 6570 §2.4.1 truncates a prefixed value to `:max-length` characters, and templates are matched
+   * against the fully percent-decoded URI, so the limit is a plain character bound on the matched
+   * text. A prefix RE2 cannot express as a repeat count leaves the variable unbounded (its own class
+   * still applies), which cannot deny a legitimate expansion.
+   */
+  private static boundedClass(spec: UriTemplateVarSpec, cls: string, min: number): string {
+    if (spec.prefix == null || spec.prefix > MCPManager.MAX_REPEAT_COUNT) {
+      return `${cls}${min === 0 ? '*' : '+'}`;
+    }
+    return `${cls}{${min},${spec.prefix}}`;
+  }
+
+  /**
+   * Compiles a form-style query expansion (`{?a,b}`) or continuation (`{&a,b}`) as a bounded
+   * sequence. RFC 6570 §3.2.8/§3.2.9: variables expand in declared order, an undefined one is
+   * skipped entirely, a `?` expression prefixes its first present component with `?` and the rest
+   * with `&` (a `&` expression prefixes every component with `&`), and a non-exploded variable
+   * appends its name, `=`, and one value. So the expansion of `{?id}` is a single `?id=<value>` pair,
+   * never `?id=public&id=admin`, which the previous open run of declared keys accepted and forwarded
+   * to a server whose first/last-value semantics could resolve a resource no expansion produces. The
+   * bound is per varspec, so a literal pair the template already carries next to an expansion of the
+   * same name still matches.
+   *
+   * Declared order is enforced rather than any permutation: expansion is order-preserving, so a
+   * reordered query string is not something the advertised template can emit.
+   *
+   * An exploded variable over a list repeats its own key (`{?list*}` produces
+   * `?list=red&list=green`), so its component allows that repeat. An exploded associative array
+   * expands to keys the template never names; those stay unmatchable, as they already were, because
+   * nothing in the template makes them knowable.
+   */
+  private static compileQueryExpansion(op: string, varSpecs: string[]): string | null {
+    const specs = MCPManager.parseVarSpecs(varSpecs);
+    if (specs == null) {
+      return null;
+    }
+    const units = specs.map((spec) => {
+      const name = spec.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const unit = `${name}=${MCPManager.boundedClass(spec, '[^#&]', 0)}`;
+      return spec.explode ? `${unit}(?:&${unit})*` : unit;
+    });
+    const lead = op === '?' ? '\\?' : '&';
+    // One branch per possible first present variable, each followed by the optional later ones in
+    // declared order. At least one component is required, keeping the existing denial for a URI that
+    // omits the whole expansion.
+    const branches = units.map((unit, index) =>
+      units.slice(index + 1).reduce((branch, rest) => `${branch}(?:&${rest})?`, `${lead}${unit}`),
+    );
+    return branches.length === 1 ? branches[0] : `(?:${branches.join('|')})`;
+  }
+
+  /**
+   * Compiles an expansion in which at least one variable carries a `:max-length` prefix. RFC 6570
+   * §2.4.1 truncates a prefixed string value to that many characters, and templates are matched
+   * against the fully percent-decoded URI, so the limit is a plain character bound on the matched
+   * text. Without it, `db://items/{id:3}` authorizes `db://items/admin`.
+   *
+   * Variables expand in declared order and an undefined one contributes nothing, so what a
+   * multi-variable expression can produce is any ordered subsequence of its components. Those are
+   * compiled as a chain of optional per-variable units, each with its own bound, rather than one
+   * shared quantifier: a shared quantifier would either apply the tightest bound to every position
+   * or, as before, none to any. The chain still requires at least one component, keeping the
+   * existing denial for a URI that omits the whole expansion.
+   */
+  private static compilePrefixedExpansion(op: string, varSpecs: string[]): string | null {
+    const specs = MCPManager.parseVarSpecs(varSpecs);
+    if (specs == null) {
+      return null;
+    }
+    const bound = MCPManager.boundedClass;
+    const component = (spec: UriTemplateVarSpec, delimiter: string, cls: string): string => {
+      const unit = `${delimiter}${bound(spec, cls, 1)}`;
+      return spec.explode ? `(?:${unit})+` : unit;
+    };
+    const chain = (units: string[]): string => {
+      const branches = units.map((unit, index) =>
+        units.slice(index + 1).reduce((branch, rest) => `${branch}(?:${rest})?`, `(?:${unit})`),
+      );
+      return branches.length === 1 ? branches[0] : `(?:${branches.join('|')})`;
+    };
+    /** Comma-joined operators expand to one run, so their bound is the sum plus the separators. */
+    const joined = (cls: string, min: number, literal = ''): string => {
+      let total = specs.length - 1;
+      for (const spec of specs) {
+        if (spec.prefix == null || spec.explode) {
+          return `${literal}${cls}${min === 0 ? '*' : '+'}`;
+        }
+        total += spec.prefix;
+      }
+      if (total > MCPManager.MAX_REPEAT_COUNT) {
+        return `${literal}${cls}${min === 0 ? '*' : '+'}`;
+      }
+      return `${literal}${cls}{${min},${total}}`;
+    };
+    const escaped = (spec: UriTemplateVarSpec): string =>
+      spec.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    switch (op) {
+      case '+':
+        return joined('[^?#]', 1);
+      case '#':
+        return joined('[^\\s]', 0, '#');
+      case '/':
+        return chain(specs.map((spec) => component(spec, '/', '[^/?#]')));
+      case '.':
+        return specs.length === 1 && !specs[0].explode
+          ? component(specs[0], '\\.', '[^/?#]')
+          : chain(specs.map((spec) => component(spec, '\\.', '[^/?#.]')));
+      case ';':
+        return chain(
+          specs.map((spec) => {
+            const unit = `;${escaped(spec)}(?:=${bound(spec, '[^/?#;&]', 0)})?`;
+            return spec.explode ? `(?:${unit})+` : unit;
+          }),
+        );
+      default:
+        return joined('[^/?#&=]', 1);
     }
   }
 
@@ -1195,16 +1634,9 @@ Please follow these instructions when using tools from the respective MCP server
       );
     }
 
-    const result = await connection.client.request(
-      {
-        method: 'resources/list',
-        params: cursor != null ? { cursor } : {},
-      },
-      ListResourcesResultSchema,
-      { timeout: connection.timeout },
-    );
-
-    return result;
+    return connection.client.listResources(cursor != null ? { cursor } : {}, {
+      timeout: connection.timeout,
+    });
   }
 
   async listResourceTemplates({
@@ -1245,16 +1677,9 @@ Please follow these instructions when using tools from the respective MCP server
       );
     }
 
-    const result = await connection.client.request(
-      {
-        method: 'resources/templates/list',
-        params: cursor != null ? { cursor } : {},
-      },
-      ListResourceTemplatesResultSchema,
-      { timeout: connection.timeout },
-    );
-
-    return result;
+    return connection.client.listResourceTemplates(cursor != null ? { cursor } : {}, {
+      timeout: connection.timeout,
+    });
   }
 
   /**
@@ -1301,7 +1726,7 @@ Please follow these instructions when using tools from the respective MCP server
       );
     }
 
-    const cacheKey = `${serverName}:${userId ?? ''}`;
+    const cacheKey = this.cacheScope(serverName, connection, userId);
     if (!this.isToolCacheFresh(cacheKey, connection)) {
       await this.populateToolCaches(connection, cacheKey);
     }
@@ -1319,7 +1744,9 @@ Please follow these instructions when using tools from the respective MCP server
       );
     }
 
-    const result = await connection.client.request(
+    // Same reason as callTool: the typed wrapper adds outputSchema enforcement this proxy must not
+    // impose on an app follow-up call.
+    return connection.client.request(
       {
         method: 'tools/call',
         params: {
@@ -1330,7 +1757,5 @@ Please follow these instructions when using tools from the respective MCP server
       CallToolResultSchema,
       { timeout: connection.timeout, resetTimeoutOnProgress: true },
     );
-
-    return result;
   }
 }

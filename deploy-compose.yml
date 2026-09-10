@@ -20,6 +20,7 @@ services:
       - NODE_ENV=production
       - MONGO_URI=mongodb://mongodb:27017/LibreChat
       - MEILI_HOST=http://meilisearch:7700
+      - LIBRECHAT_TEMP_CREDENTIALS_PATH=/app/data/.env.temp
       # - RAG_PORT=${RAG_PORT:-8000}
       # - RAG_API_URL=http://rag_api:${RAG_PORT:-8000}
       - PROXY=${PROXY:-}
@@ -38,6 +39,7 @@ services:
       - /home/ubuntu/LibreChat/uploads:/app/uploads
       - /home/ubuntu/LibreChat/logs:/app/api/logs
       - /home/ubuntu/LibreChat/skill:/app/skill
+      - librechat-data:/app/data
 
   admin-panel:
     image: registry.librechat.ai/clickhouse/librechat-admin-panel:latest
@@ -47,6 +49,8 @@ services:
     restart: always
     environment:
       - PORT=3000
+      # Plain expansion (not :?) so `docker compose down`/`pull` still run when this is unset.
+      # The panel itself refuses to start without it; set ADMIN_PANEL_SESSION_SECRET in .env.
       - SESSION_SECRET=${ADMIN_PANEL_SESSION_SECRET}
       - API_SERVER_URL=http://api:3080
       - VITE_API_BASE_URL=${DOMAIN_CLIENT:-http://localhost}
@@ -96,6 +100,7 @@ services:
   #     - vectordb
   #   env_file:
   #     - .env
-  #
-  # volumes:
-  #   pgdata2:
+
+volumes:
+  librechat-data:
+  # pgdata2:
